@@ -8,6 +8,7 @@ from telegram.ext import Application, CommandHandler
 from .config import settings
 from .db import db
 from .handlers import help_message, register_handlers, start
+from .queue_manager import encoding_queue
 
 
 logging.basicConfig(
@@ -19,6 +20,10 @@ logger = logging.getLogger("lily")
 
 async def help_handler(update: Update, context) -> None:
     await help_message(update)
+
+
+async def post_shutdown(application: Application) -> None:
+    await encoding_queue.stop()
 
 
 async def post_init(application: Application) -> None:
@@ -34,7 +39,7 @@ def build_application() -> Application:
     builder = Application.builder().token(settings.bot_token)
     if settings.use_local_bot_api:
         builder = builder.base_url(settings.bot_api_base).base_file_url(settings.bot_file_base).local_mode(True)
-    application = builder.post_init(post_init).build()
+    application = builder.post_init(post_init).post_shutdown(post_shutdown).build()
     # Only onboarding/help remain as optional Telegram commands; all actual work is AI-first natural language.
     application.add_handler(CommandHandler("start", start), group=-1)
     application.add_handler(CommandHandler("help", help_handler), group=-1)

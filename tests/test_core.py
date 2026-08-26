@@ -10,6 +10,7 @@ from lily.model_router import ModelProfile, ModelRouter
 from lily.plugin_manager import plugin_manager
 from lily.db import Database
 from lily.postbot import ChannelPostService
+from lily.pagination import PaginationManager
 from lily.rich import confirmation_keyboard
 from lily.tools import safe_filename
 
@@ -63,6 +64,29 @@ class LilyCoreTests(unittest.TestCase):
                 self.assertEqual((await database.get_notes(1, "rules"))[0]["content"], "Be kind")
                 await database.index_post("-1001", 42, "Dragon Ball", "Episode announcement", "https://t.me/c/1/42")
                 self.assertEqual((await database.search_posts("-1001", "dragon"))[0]["message_id"], 42)
+        asyncio.run(run())
+
+    def test_pagination_pages_and_keyboard(self):
+        manager = PaginationManager()
+        session = manager.create(7, 1, "dragon", [{"title": f"Result {i}", "message_id": i} for i in range(12)], page_size=5)
+        self.assertEqual(session.pages, 3)
+        self.assertEqual(len(session.current()), 5)
+        self.assertIn("search:", str(manager.keyboard(session)))
+        session.page = 2
+        self.assertEqual(len(session.current()), 2)
+
+    def test_persistent_encoding_job_transitions(self):
+        async def run():
+            with tempfile.TemporaryDirectory() as directory:
+                database = Database(str(Path(directory) / "queue.sqlite3"))
+                await database.init()
+                await database.create_encoding_job("abc123", 1, 7, {"action": "encode_media"})
+                await database.update_encoding_job("abc123", state="running", progress="50%")
+                item = await database.get_encoding_job("abc123")
+                self.assertEqual(item["state"], "running")
+                self.assertEqual(item["progress"], "50%")
+                await database.update_encoding_job("abc123", state="completed", progress="Completed")
+                self.assertEqual((await database.get_encoding_job("abc123"))["state"], "completed")
         asyncio.run(run())
 
     def test_model_family_payload_shapes_tokens_and_reasoning(self):

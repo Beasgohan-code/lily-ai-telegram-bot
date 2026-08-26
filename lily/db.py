@@ -149,6 +149,18 @@ class Database:
                     created_at INTEGER NOT NULL,
                     UNIQUE(channel_id, message_id)
                 );
+                CREATE TABLE IF NOT EXISTS encoding_jobs (
+                    job_id TEXT PRIMARY KEY,
+                    chat_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    plan_json TEXT NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'queued',
+                    progress TEXT NOT NULL DEFAULT '',
+                    error TEXT NOT NULL DEFAULT '',
+                    created_at INTEGER NOT NULL,
+                    started_at INTEGER,
+                    finished_at INTEGER
+                );
                 """
             )
             await db.commit()
@@ -367,6 +379,50 @@ class Database:
         async with self.connect() as db:
             rows = await (await db.execute("SELECT * FROM indexed_posts WHERE channel_id=? AND (lower(title) LIKE ? OR lower(content) LIKE ?) ORDER BY id DESC LIMIT ?", (channel_id, pattern, pattern, limit))).fetchall()
             return [dict(row) for row in rows]
+
+    async def create_encoding_job(self, job_id: str, chat_id: int, user_id: int, plan: dict[str, Any]) -> None:
+        async with self.connect() as db:
+            await db.execute("INSERT INTO encoding_jobs(job_id,chat_id,user_id,plan_json,created_at) VALUES(?,?,?,?,?)", (job_id, chat_id, user_id, json.dumps(plan), int(time.time())))
+            await db.commit()
+
+    async def update_encoding_job(self, job_id: str, state: str | None = None, progress: str | None = None, error: str | None = None) -> None:
+        fields = []
+        values: list[Any] = []
+        if state is not None:
+            fields.append("state=?"); values.append(state)
+        if progress is not None:
+            fields.append("progress=?"); values.append(progress[:500])
+        if error is not None:
+            fields.append("error=?"); values.append(error[:1000])
+        if state == "running":
+            fields.append("started_at=?"); values.append(int(time.time()))
+        if state in {"completed", "failed", "cancelled"}:
+            fields.append("finished_at=?"); values.append(int(time.time()))
+        if not fields:
+            return
+        values.append(job_id)
+        async with self.connect() as db:
+            await db.execute(f"UPDATE encoding_jobs SET {', '.join(fields)} WHERE job_id=?", values)
+            await db.commit()
+
+    async def get_encoding_job(self, job_id: str) -> dict[str, Any] | None:
+        async with self.connect() as db:
+            row = await (await db.execute("SELECT * FROM encoding_jobs WHERE job_id=?", (job_id,))).fetchone()
+            if row is None:
+                return None
+            result = dict(row)
+            result["plan"] = json.loads(result.pop("plan_json"))
+            return result
+
+    async def list_encoding_jobs(self, chat_id: int, limit: int = 20) -> list[dict[str, Any]]:
+        async with self.connect() as db:
+            rows = await (await db.execute("SELECT * FROM encoding_jobs WHERE chat_id=? ORDER BY created_at DESC LIMIT ?", (chat_id, limit))).fetchall()
+            result = []
+            for row in rows:
+                item = dict(row)
+                item["plan"] = json.loads(item.pop("plan_json"))
+                result.append(item)
+            return result
 
     async def add_memory(self, scope_key: str, content: str, user_id: int | None, chat_id: int | None) -> None:
         async with self.connect() as db:

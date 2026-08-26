@@ -17,6 +17,8 @@ from .tools import LilyTools, ToolContext
 from .postbot import post_service
 from .moderation import moderation
 from .plugin_manager import plugin_manager
+from .pagination import pagination
+from .queue_manager import encoding_queue
 
 
 tools = LilyTools(db)
@@ -257,6 +259,20 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         if not statuses:
             return "No AI model profiles are configured."
         return "\n".join(f"• {item['name']} / {item['model']} — {'available' if item['available'] else 'cooling down'}; successes={item['successes']}; failures={item['failures']}" for item in statuses)
+    if action == "queue_status":
+        job_id = str(plan.args.get("job_id") or "")
+        item = await encoding_queue.status(job_id, user_id)
+        if not item:
+            return "That encoding job was not found or does not belong to you."
+        return f"Job `{item['job_id']}` is **{item['state']}**. {item.get('progress', '')} {item.get('error', '')}"[:3500]
+    if action == "queue_list":
+        items = await encoding_queue.list(chat_id, user_id)
+        if not items:
+            return "You have no encoding jobs in this chat."
+        return "\n".join(f"• `{item['job_id']}` — {item['state']} — {item.get('progress', '')}" for item in items)[:3500]
+    if action == "cancel_queue_job":
+        ok, message = await encoding_queue.cancel(str(plan.args.get("job_id") or ""), user_id)
+        return message
     if action == "set_group_rules":
         rules = str(plan.args.get("rules", plan.args.get("text", "")))
         await db.update_chat_settings(chat_id, {"rules": rules}, update.effective_chat.title or "")
@@ -298,10 +314,12 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         query = str(plan.args.get("query") or "").strip()
         if not channel_id or not query:
             return "Provide both the channel ID and search phrase."
-        results = await db.search_posts(channel_id, query)
+        results = await db.search_posts(channel_id, query, limit=100)
         if not results:
             return "No indexed Lily posts matched that search."
-        return "\n".join(f"• {row['title']} — {row.get('link') or 'message ' + str(row['message_id'])}" for row in results)[:3500]
+        session = pagination.create(user_id, chat_id, query, results)
+        await rich.send(chat_id, pagination.blocks(session), reply_markup=pagination.keyboard(session), reply_to=update.effective_message.message_id)
+        return f"Displayed {len(results)} search result(s)."
     if action == "create_skill":
         trigger = plan.args.get("trigger")
         skill_action = plan.args.get("action")
@@ -340,8 +358,11 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         return f"{result} ({label})."
     if action in {"rename_file", "compress_file", "encode_media", "create_file", "download_song"}:
         async def progress(value: str) -> None:
+            job_id = context.user_data.get("_encoding_job_id")
+            if job_id:
+                await db.update_encoding_job(job_id, progress=value)
             await progress_message(update, value)
-        ctx = ToolContext(update=update, context=context, db=db, progress=progress)
+        ctx = ToolContext(update=update, context=context, db=db, progress=progress, source_file=plan.args.get("source_file"))
         if action == "rename_file":
             path = await tools.rename_file(ctx, str(plan.args.get("new_name", "renamed_file")))
             await tools.send_output(ctx, path, "Renamed by Lily")
@@ -397,6 +418,10 @@ async def handle_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: 
     if plan.action in ADMIN_ACTIONS and not await is_admin(update):
         await send_error(update, "Only a Telegram group admin or owner can use that action.")
         return
+    if plan.action in {"rename_file", "compress_file", "encode_media"} and plan.args.get("source_file") is None:
+        reply = _reply_context(update).get("reply", {})
+        if reply.get("file_id"):
+            plan.args["source_file"] = reply
     if plan.action == "none":
         memories = await db.recent_memories(f"chat:{update.effective_chat.id}:user:{update.effective_user.id}")
         answer = await ai.answer(plan.args.get("prompt", plan.summary), _reply_context(update), memories, chat_settings)
@@ -452,6 +477,44 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not query or not query.data:
         return
     await query.answer()
+    if query.data.startswith("search:"):
+        parts = query.data.split(":", 2)
+        if len(parts) != 3:
+            return
+        session = pagination.get(parts[1])
+        if not session:
+            await query.edit_message_text("This Lily search session expired.")
+            return
+        if session.owner_id != update.effective_user.id:
+            await query.answer("This search belongs to another user.", show_alert=True)
+            return
+        action_name = parts[2]
+        if action_name == "close":
+            pagination.sessions.pop(session.token, None)
+            await query.edit_message_text("Search results closed.")
+            return
+        if action_name == "prev":
+            session.page = max(0, session.page - 1)
+        elif action_name == "next":
+            session.page = min(session.pages - 1, session.page + 1)
+        await query.edit_message_reply_markup(reply_markup=pagination.keyboard(session))
+        await query.edit_message_text(text="\n".join([f"Media search: {session.query} · page {session.page + 1}/{session.pages}", *[f"{i}. {item.get('title', 'Untitled')} — {item.get('link') or 'message ' + str(item.get('message_id', ''))}" for i, item in enumerate(session.current(), start=session.page * session.page_size + 1)]]), reply_markup=pagination.keyboard(session))
+        return
+    if query.data.startswith("queue:"):
+        parts = query.data.split(":", 2)
+        if len(parts) != 3:
+            return
+        job_id, action_name = parts[1], parts[2]
+        item = await encoding_queue.status(job_id, update.effective_user.id)
+        if not item:
+            await query.answer("This job is not yours or no longer exists.", show_alert=True)
+            return
+        if action_name == "cancel":
+            ok, message = await encoding_queue.cancel(job_id, update.effective_user.id)
+            await query.answer(message, show_alert=True)
+            item = await encoding_queue.status(job_id, update.effective_user.id)
+        await query.edit_message_text(text=f"Encoding job `{job_id}`\nState: **{item['state']}**\n{item.get('progress', '')}\n{item.get('error', '')}", parse_mode="Markdown", reply_markup=inline_keyboard([[('Refresh', f'queue:{job_id}:status'), ('Cancel', f'queue:{job_id}:cancel')]]) if item['state'] in {'queued', 'running'} else None)
+        return
     if query.data in {"postpublish", "postcancel"}:
         state = context.user_data.get("post_state")
         if not state or state.get("stage") != "preview":
@@ -499,8 +562,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if plan.action == "download_song":
         plan.args["rights_confirmed"] = True
     await query.edit_message_reply_markup(reply_markup=None)
-    await progress_message(update, "Approval received. Lily is executing the action…")
     try:
+        if plan.action == "encode_media":
+            job_id = await encoding_queue.enqueue(update, context, plan, execute_plan)
+            await rich.send(update.effective_chat.id, [heading("Encoding job queued", 2), paragraph(f"Job ID: `{job_id}`"), paragraph("Lily will process it in the background. You can refresh its status or cancel it with the buttons below.")], reply_markup=inline_keyboard([[('Refresh', f'queue:{job_id}:status'), ('Cancel', f'queue:{job_id}:cancel')]]))
+            return
+        await progress_message(update, "Approval received. Lily is executing the action…")
         result = await execute_plan(update, context, plan)
         await rich.send(update.effective_chat.id, [heading("Approved and completed", 2), paragraph(result)])
     except Exception as exc:
@@ -520,5 +587,5 @@ def register_handlers(application: Application) -> None:
     plugin_manager.discover()
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_handler), group=-1)
     application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, on_message), group=0)
-    application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^(confirm:|postpublish$|postcancel$)"), group=0)
+    application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^(confirm:|postpublish$|postcancel$|search:|queue:)"), group=0)
     application.add_error_handler(on_error)

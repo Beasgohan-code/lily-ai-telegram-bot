@@ -26,6 +26,7 @@ class ToolContext:
     context: ContextTypes.DEFAULT_TYPE
     db: Database
     progress: callable
+    source_file: dict | None = None
 
 
 def safe_filename(name: str, fallback: str = "lily_output") -> str:
@@ -58,7 +59,7 @@ class LilyTools:
 
     async def _download_telegram_file(self, ctx: ToolContext, target: Path) -> dict:
         message = ctx.update.effective_message
-        source = source_file_from_message(message.reply_to_message if message and message.reply_to_message else message)
+        source = ctx.source_file or source_file_from_message(message.reply_to_message if message and message.reply_to_message else message)
         if not source:
             raise ValueError("Reply to a document, video, audio, voice message, or photo.")
         size = int(source.get("file_size") or 0)
@@ -80,7 +81,7 @@ class LilyTools:
         async with self.sem:
             source_name = safe_filename(new_name)
             source = ctx.update.effective_message.reply_to_message if ctx.update.effective_message.reply_to_message else ctx.update.effective_message
-            source_meta = source_file_from_message(source)
+            source_meta = ctx.source_file or source_file_from_message(source)
             if not source_meta:
                 raise ValueError("Reply to the file you want Lily to rename.")
             old_name = source_meta["file_name"]
@@ -97,7 +98,7 @@ class LilyTools:
         async with self.sem:
             source_name = safe_filename("source.bin")
             source_message = ctx.update.effective_message.reply_to_message if ctx.update.effective_message.reply_to_message else ctx.update.effective_message
-            source_meta = source_file_from_message(source_message)
+            source_meta = ctx.source_file or source_file_from_message(source_message)
             if source_meta:
                 source_name = safe_filename(source_meta["file_name"])
             input_path = settings.work_dir / f"input_{ctx.update.update_id}_{source_name}"
@@ -116,7 +117,7 @@ class LilyTools:
     async def encode_media(self, ctx: ToolContext, codec: str = "h264", container: str = "mp4") -> Path:
         async with self.sem:
             source_message = ctx.update.effective_message.reply_to_message if ctx.update.effective_message.reply_to_message else ctx.update.effective_message
-            meta = source_file_from_message(source_message)
+            meta = ctx.source_file or source_file_from_message(source_message)
             if not meta:
                 raise ValueError("Reply to a video or audio file to encode it.")
             input_path = settings.work_dir / f"encode_{ctx.update.update_id}_{safe_filename(meta['file_name'])}"

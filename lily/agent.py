@@ -18,7 +18,7 @@ ACTIONS = {
     "web_research", "generate_image", "create_poll", "remember", "forget_memory",
     "start_channel_post", "publish_channel_post", "delete_last_post",
     "add_filter", "remove_filter", "set_lock", "save_note", "list_notes", "search_posts", "show_warnings",
-    "plugin_reply", "model_status",
+    "plugin_reply", "model_status", "queue_status", "queue_list", "cancel_queue_job",
 }
 
 RISK = {"safe", "risky", "dangerous"}
@@ -152,6 +152,14 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
         low = value.lower()
         reply = context.get("reply", {})
         target_id = context.get("target_user_id") or reply.get("user_id")
+        if any(word in low for word in ("queue status", "encoding status", "what is encoding")):
+            job_id = next(iter(re.findall(r"\b[0-9a-f]{8,16}\b", low)), "")
+            return Plan(intent="queue_status", summary="Show encoding queue status", action="queue_status", risk="safe", args={"job_id": job_id}, missing=[] if job_id else ["Provide or select an encoding job ID"], confidence=0.9)
+        if any(word in low for word in ("encoding queue", "list encoding jobs", "show my encoding jobs")):
+            return Plan(intent="queue_list", summary="List encoding jobs", action="queue_list", risk="safe", confidence=0.9)
+        if any(word in low for word in ("cancel encoding", "cancel this job", "stop encoding")):
+            job_id = next(iter(re.findall(r"\b[0-9a-f]{8,16}\b", low)), "")
+            return Plan(intent="cancel_queue_job", summary="Cancel an encoding job", action="cancel_queue_job", risk="risky", requires_confirmation=True, args={"job_id": job_id}, missing=[] if job_id else ["Provide or select an encoding job ID"], confidence=0.9)
         if any(word in low for word in ("usage", "limits", "quota")):
             return Plan(intent="usage", summary="Show my current Lily usage", action="usage", confidence=0.95)
         if any(word in low for word in ("model status", "ai status", "which model")):
