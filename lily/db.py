@@ -20,6 +20,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "welcome_enabled": True,
     "welcome_text": "Welcome {user} to {group}! Please read the rules.",
     "warning_escalation": 3,
+    "auto_rename_enabled": settings.auto_rename_enabled,
+    "auto_rename_template": settings.auto_rename_template,
     "memory_enabled": False,
     "auto_confirm_safe": True,
     "daily_request_limit": settings.daily_request_limit,

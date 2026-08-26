@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from lily.agent import AIClient
 from lily.model_router import ModelProfile, ModelRouter
@@ -13,6 +15,9 @@ from lily.postbot import ChannelPostService
 from lily.pagination import PaginationManager
 from lily.rich import confirmation_keyboard
 from lily.tools import safe_filename
+import lily.web_media as web_media
+from lily.web_media import stream_links
+from lily.config import settings
 
 
 class LilyCoreTests(unittest.TestCase):
@@ -50,6 +55,22 @@ class LilyCoreTests(unittest.TestCase):
     def test_heuristic_router_understands_channel_post(self):
         plan = AIClient().heuristic_plan("make an anime episode announcement for Dragon Ball", {})
         self.assertEqual(plan.action, "start_channel_post")
+
+    def test_heuristic_router_reads_numeric_target_from_plain_text(self):
+        plan = AIClient().heuristic_plan("Lily, demote user 123456789", {"chat_type": "cli", "reply": {}})
+        self.assertEqual(plan.action, "demote_user")
+        self.assertEqual(plan.args["user_id"], 123456789)
+
+    def test_signed_stream_link_resolves_lily_managed_file(self):
+        updated_settings = replace(settings, stream_public_base_url="https://lily.example.test", stream_signing_secret="test-signing-secret")
+        path = settings.work_dir / "stream_test.bin"
+        with patch.object(web_media, "settings", updated_settings):
+            settings.work_dir.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"lily")
+            link = stream_links.create(path, 99)
+            token = link.rsplit("/", 1)[-1]
+            self.assertEqual(stream_links.resolve(token), path.resolve())
+        path.unlink(missing_ok=True)
 
     def test_moderation_state_and_post_search_persist(self):
         async def run():

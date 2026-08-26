@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -12,21 +13,24 @@ from telegram.ext import Application, CallbackQueryHandler, ContextTypes, Messag
 from .agent import Plan, ai
 from .config import settings
 from .db import db
-from .rich import blockquote, bold, code, confirmation_keyboard, details, divider, heading, inline_keyboard, list_block, paragraph, preformatted, rich, table, thinking
-from .tools import LilyTools, ToolContext
+from .rich import blockquote, bold, code, confirmation_keyboard, custom_emoji, details, divider, heading, inline_keyboard, list_block, paragraph, preformatted, rich, table, thinking
+from .tools import LilyTools, ToolContext, safe_filename, source_file_from_message
 from .postbot import post_service
 from .moderation import moderation
 from .plugin_manager import plugin_manager
 from .pagination import pagination
 from .queue_manager import encoding_queue
+from .web_media import stream_links, web_search
+from .messaging import send_long_rich
+from .media_generation import media_generation
 
 
 tools = LilyTools(db)
 
 ADMIN_ACTIONS = {
-    "ban_user", "kick_user", "mute_user", "unmute_user", "delete_message", "pin_message",
+    "ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "demote_user", "promote_user", "delete_message", "purge_messages", "report_user", "pin_message",
     "set_settings", "create_skill", "set_group_rules", "start_channel_post", "publish_channel_post", "delete_last_post",
-    "warn_user", "add_filter", "remove_filter", "set_lock", "save_note", "list_notes", "search_posts", "show_warnings",
+    "warn_user", "add_filter", "remove_filter", "set_lock", "save_note", "list_notes", "search_posts", "show_warnings", "set_auto_rename", "stream_link",
 }
 
 
@@ -94,7 +98,11 @@ async def progress_message(update: Update, text_value: str) -> None:
     chat = update.effective_chat
     if not chat:
         return
-    await rich.send(chat.id, [heading("Lily is working", 3), thinking(), paragraph(text_value)], reply_to=update.effective_message.message_id if update.effective_message else None)
+    blocks = [heading("Lily is working", 3)]
+    if settings.custom_emoji_id:
+        blocks.append(paragraph([custom_emoji(settings.custom_emoji_id, "✦"), " Agent activity"] ))
+    blocks.extend([thinking(), paragraph(text_value)])
+    await rich.send(chat.id, blocks, reply_to=update.effective_message.message_id if update.effective_message else None)
 
 
 async def send_error(update: Update, message: str) -> None:
@@ -222,6 +230,21 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         await update.get_bot().ban_chat_member(chat_id, int(plan.args["user_id"]))
         await db.audit(chat_id, user_id, "ban_user", plan.args)
         return f"User {plan.args['user_id']} was banned."
+    if action == "unban_user":
+        target = int(plan.args["user_id"])
+        await update.get_bot().unban_chat_member(chat_id, target, only_if_banned=True)
+        await db.audit(chat_id, user_id, "unban_user", plan.args)
+        return f"User {target} was unbanned."
+    if action == "demote_user":
+        target = int(plan.args["user_id"])
+        await update.get_bot().promote_chat_member(chat_id, target, is_anonymous=False, can_manage_chat=False, can_delete_messages=False, can_manage_video_chats=False, can_restrict_members=False, can_promote_members=False, can_change_info=False, can_invite_users=False, can_pin_messages=False)
+        await db.audit(chat_id, user_id, "demote_user", plan.args)
+        return f"User {target} was demoted."
+    if action == "promote_user":
+        target = int(plan.args["user_id"])
+        await update.get_bot().promote_chat_member(chat_id, target, can_manage_chat=True, can_delete_messages=True, can_manage_video_chats=True, can_restrict_members=True, can_promote_members=False, can_change_info=True, can_invite_users=True, can_pin_messages=True)
+        await db.audit(chat_id, user_id, "promote_user", plan.args)
+        return f"User {target} was promoted with safe moderator permissions."
     if action == "kick_user":
         target = int(plan.args["user_id"])
         await update.get_bot().ban_chat_member(chat_id, target)
@@ -242,6 +265,23 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         await update.get_bot().delete_message(chat_id, int(plan.args["message_id"]))
         await db.audit(chat_id, user_id, "delete_message", plan.args)
         return "The message was deleted."
+    if action == "purge_messages":
+        count = max(1, min(100, int(plan.args.get("count", 10))))
+        end_id = update.effective_message.message_id
+        deleted = 0
+        for message_id in range(end_id, max(0, end_id - count), -1):
+            try:
+                await update.get_bot().delete_message(chat_id, message_id)
+                deleted += 1
+            except Exception:
+                continue
+        await db.audit(chat_id, user_id, "purge_messages", {"count": count, "deleted": deleted})
+        return f"Purged {deleted} message(s)."
+    if action == "report_user":
+        reason = str(plan.args.get("reason") or "Reported by a group member")
+        target = _reply_context(update).get("reply", {}).get("user_name", "the replied user")
+        await db.audit(chat_id, user_id, "report_user", {"target": target, "reason": reason})
+        return f"Report recorded for {target}. Group admins can review the audit log."
     if action == "pin_message":
         await update.get_bot().pin_chat_message(chat_id, int(plan.args.get("message_id", update.effective_message.message_id)), disable_notification=True)
         return "The message was pinned."
@@ -273,6 +313,36 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
     if action == "cancel_queue_job":
         ok, message = await encoding_queue.cancel(str(plan.args.get("job_id") or ""), user_id)
         return message
+    if action == "web_search":
+        results = await web_search.search(str(plan.args.get("query") or plan.summary))
+        if not results:
+            return "No web results were found."
+        rows = [["Title", "URL"]] + [[item["title"][:100], item["url"][:160]] for item in results]
+        await rich.send(chat_id, [heading("Web search", 2), paragraph(f"Results for: {plan.args.get('query', plan.summary)}"), table(rows), details("Snippets", [paragraph(f"{item['title']}: {item['snippet']}") for item in results])])
+        return f"Displayed {len(results)} web result(s)."
+    if action == "generate_image":
+        await progress_message(update, "Sending your image brief to the configured generation provider…")
+        url = await media_generation.image(str(plan.args.get("prompt") or plan.summary), str(plan.args.get("aspect_ratio") or "1:1"))
+        await rich.send(chat_id, [heading("Image ready", 2), paragraph("Lily generated an image from your brief."), blockquote(url, "Output link")])
+        return f"Generated image: {url}"
+    if action == "generate_video":
+        await progress_message(update, "Sending your video brief to the configured generation provider…")
+        url = await media_generation.video(str(plan.args.get("prompt") or plan.summary), str(plan.args.get("aspect_ratio") or "16:9"), int(plan.args.get("duration_seconds") or 8))
+        await rich.send(chat_id, [heading("Video ready", 2), paragraph("Lily generated a video from your brief."), blockquote(url, "Output link")])
+        return f"Generated video: {url}"
+    if action == "stream_link":
+        async def stream_progress(value: str) -> None:
+            await progress_message(update, value)
+        ctx = ToolContext(update=update, context=context, db=db, progress=stream_progress, source_file=plan.args.get("source_file"))
+        source = ctx.source_file or _reply_context(update).get("reply", {})
+        filename = safe_filename(str(source.get("file_name") or "media.bin"))
+        path = settings.work_dir / f"stream_{update.update_id}_{filename}"
+        await tools._download_telegram_file(ctx, path)
+        return f"Your expiring direct streaming link is:\n{stream_links.create(path, user_id)}"
+    if action == "set_auto_rename":
+        enabled = bool(plan.args.get("enabled", True))
+        await db.update_chat_settings(chat_id, {"auto_rename_enabled": enabled, "auto_rename_template": str(plan.args.get("template") or settings.auto_rename_template)}, update.effective_chat.title or "")
+        return f"Automatic file renaming is now {'enabled' if enabled else 'disabled'} for this chat."
     if action == "set_group_rules":
         rules = str(plan.args.get("rules", plan.args.get("text", "")))
         await db.update_chat_settings(chat_id, {"rules": rules}, update.effective_chat.title or "")
@@ -305,6 +375,12 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
     if action == "list_notes":
         notes = await db.get_notes(chat_id, str(plan.args.get("name")) if plan.args.get("name") else None)
         return "\n".join(f"• {item['name']}: {item['content']}" for item in notes)[:3500] or "No notes are saved for this group."
+    if action == "list_filters":
+        filters_list = await db.list_filters(chat_id)
+        return "\n".join(f"• `{item['trigger']}` → delete={bool(item['delete_message'])}, warn={bool(item['warn'])}" for item in filters_list)[:3500] or "No filters are configured."
+    if action == "list_locks":
+        locks = await db.get_locks(chat_id)
+        return "\n".join(f"• {name}: {'locked' if enabled else 'unlocked'}" for name, enabled in locks.items()) or "No locks are configured."
     if action == "show_warnings":
         target_id = int(plan.args.get("user_id") or _reply_context(update).get("reply", {}).get("user_id"))
         warnings = await db.list_warnings(chat_id, target_id)
@@ -390,7 +466,7 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         return "Memory deletion should be implemented with a targeted memory ID in the next storage migration."
     if action == "set_reminder":
         return "The reminder skill is registered as an extension point; connect Lily’s persistent scheduler before enabling autonomous reminders."
-    if action in {"summarize_chat", "extract_tasks", "translate", "web_research", "generate_image", "create_poll"}:
+    if action in {"summarize_chat", "extract_tasks", "translate", "web_research", "create_poll"}:
         return "This skill is recognized by Lily’s agent router and is ready for a provider-specific integration. The core backend keeps the action permissioned instead of pretending it completed."
     return "The request was understood, but no executable skill is enabled for it yet."
 
@@ -418,14 +494,14 @@ async def handle_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: 
     if plan.action in ADMIN_ACTIONS and not await is_admin(update):
         await send_error(update, "Only a Telegram group admin or owner can use that action.")
         return
-    if plan.action in {"rename_file", "compress_file", "encode_media"} and plan.args.get("source_file") is None:
+    if plan.action in {"rename_file", "compress_file", "encode_media", "stream_link"} and plan.args.get("source_file") is None:
         reply = _reply_context(update).get("reply", {})
         if reply.get("file_id"):
             plan.args["source_file"] = reply
     if plan.action == "none":
         memories = await db.recent_memories(f"chat:{update.effective_chat.id}:user:{update.effective_user.id}")
         answer = await ai.answer(plan.args.get("prompt", plan.summary), _reply_context(update), memories, chat_settings)
-        await rich.send(update.effective_chat.id, [heading("Lily", 2), paragraph(answer)])
+        await send_long_rich(update.effective_chat.id, answer, title="Lily", reply_to=update.effective_message.message_id)
         return
     if plan.requires_confirmation or plan.risk in {"risky", "dangerous"}:
         action_id = await db.create_pending(update.effective_chat.id, update.effective_user.id, plan.action, _plan_dict(plan), settings.confirmation_ttl_seconds)
@@ -437,18 +513,48 @@ async def handle_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: 
     await rich.send(update.effective_chat.id, [heading("Completed", 2), paragraph(result)])
 
 
+async def auto_rename_upload(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_settings: dict[str, Any]) -> bool:
+    message = update.effective_message
+    source = source_file_from_message(message)
+    if not source or not chat_settings.get("auto_rename_enabled"):
+        return False
+    old_name = source["file_name"]
+    stem = Path(old_name).stem
+    season_match = re.search(r"(?:s|season)[ ._-]*(\d+)", stem, re.IGNORECASE)
+    episode_match = re.search(r"(?:e|episode)[ ._-]*(\d+)", stem, re.IGNORECASE)
+    pair_match = re.search(r"(\d{1,2})x(\d{1,4})", stem, re.IGNORECASE)
+    season = int(season_match.group(1)) if season_match else int(pair_match.group(1)) if pair_match else 1
+    episode = int(episode_match.group(1)) if episode_match else int(pair_match.group(2)) if pair_match else 1
+    quality_match = re.search(r"(?:2160p|1080p|720p|480p|360p|4k|8k)", stem, re.IGNORECASE)
+    quality = quality_match.group(0) if quality_match else "Original"
+    title = re.sub(r"[._-]*(?:s\d+e\d+|\d+x\d+|season[ ._-]*\d+|episode[ ._-]*\d+|2160p|1080p|720p|480p|360p|4k|8k).*", "", stem, flags=re.IGNORECASE).strip(" ._-_") or stem
+    extension = Path(old_name).suffix.lstrip(".") or "bin"
+    try:
+        new_name = chat_settings.get("auto_rename_template", settings.auto_rename_template).format(title=safe_filename(title), season=season, episode=episode, quality=quality, ext=extension)
+    except (KeyError, ValueError):
+        new_name = f"{safe_filename(title)} - S{season:02d}E{episode:02d} - {quality}.{extension}"
+    new_name = safe_filename(new_name)
+    if new_name == old_name:
+        return False
+    plan = Plan(intent="auto_rename", summary=f"Automatically rename {old_name}", action="rename_file", risk="safe", requires_confirmation=False, args={"new_name": new_name, "source_file": source})
+    await handle_plan(update, context, plan, chat_settings)
+    return True
+
+
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     if not message or not update.effective_chat or not update.effective_user:
         return
     text_value = message.text or message.caption or ""
-    if not text_value and not message.reply_to_message:
-        return
     if await handle_post_state(update, context):
         return
     if not await moderation.inspect(update):
         return
     settings_for_chat = await db.get_chat_settings(update.effective_chat.id, update.effective_chat.title or "")
+    if not text_value and await auto_rename_upload(update, context, settings_for_chat):
+        return
+    if not text_value and not message.reply_to_message:
+        return
     skill_plan = await skill_trigger(update)
     plugin_plan = await plugin_manager.plan(text_value, update.effective_chat.id, update.effective_user.id, message.message_id)
     bot_username = context.application.bot.username

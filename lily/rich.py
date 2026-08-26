@@ -25,6 +25,10 @@ def code(value: str) -> dict[str, Any]:
     return {"type": "code", "text": value}
 
 
+def custom_emoji(custom_emoji_id: str, fallback_text: str = "✨") -> dict[str, Any]:
+    return {"type": "custom_emoji", "custom_emoji_id": str(custom_emoji_id), "text": fallback_text}
+
+
 def paragraph(value: str | list[Any]) -> dict[str, Any]:
     return {"type": "paragraph", "text": value}
 

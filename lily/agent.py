@@ -11,14 +11,14 @@ from .model_router import ModelProfile, ModelRouter
 
 ACTIONS = {
     "none", "help", "usage", "set_settings", "create_skill", "list_skills",
-    "ban_user", "kick_user", "mute_user", "unmute_user", "delete_message",
+    "ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "demote_user", "promote_user", "delete_message", "purge_messages", "report_user",
     "warn_user", "pin_message", "set_group_rules", "welcome_member",
     "rename_file", "compress_file", "encode_media", "create_file", "summarize_file",
     "download_song", "set_reminder", "summarize_chat", "extract_tasks", "translate",
-    "web_research", "generate_image", "create_poll", "remember", "forget_memory",
+    "web_research", "generate_image", "generate_video", "create_poll", "remember", "forget_memory",
     "start_channel_post", "publish_channel_post", "delete_last_post",
     "add_filter", "remove_filter", "set_lock", "save_note", "list_notes", "search_posts", "show_warnings",
-    "plugin_reply", "model_status", "queue_status", "queue_list", "cancel_queue_job",
+    "plugin_reply", "model_status", "queue_status", "queue_list", "cancel_queue_job", "web_search", "stream_link", "set_auto_rename", "list_filters", "list_locks",
 }
 
 RISK = {"safe", "risky", "dangerous"}
@@ -152,6 +152,24 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
         low = value.lower()
         reply = context.get("reply", {})
         target_id = context.get("target_user_id") or reply.get("user_id")
+        if not target_id:
+            numeric_targets = re.findall(r"(?<!\d)(-?\d{5,})(?!\d)", value)
+            target_id = numeric_targets[-1] if numeric_targets else None
+        if any(word in low for word in ("search the web", "web search", "look this up", "search online")):
+            query = re.sub(r"^(.*?)(search the web|web search|look this up|search online)[: ]*", "", value, flags=re.I).strip() or value
+            return Plan(intent="web_search", summary="Search the web", action="web_search", risk="safe", args={"query": query}, confidence=0.9)
+        if any(word in low for word in ("generate an image", "create an image", "make an image", "draw an image")):
+            return Plan(intent="generate_image", summary="Generate an image", action="generate_image", risk="risky", requires_confirmation=True, args={"prompt": value}, confidence=0.85)
+        if any(word in low for word in ("generate a video", "create a video", "make a video")):
+            return Plan(intent="generate_video", summary="Generate a video", action="generate_video", risk="risky", requires_confirmation=True, args={"prompt": value}, confidence=0.85)
+        if any(word in low for word in ("stream this", "make a streaming link", "direct link for this file")):
+            return Plan(intent="stream_link", summary="Create an expiring streaming link", action="stream_link", risk="risky", requires_confirmation=True, confidence=0.9)
+        if any(word in low for word in ("auto rename", "automatically rename", "rename uploads")):
+            return Plan(intent="set_auto_rename", summary="Configure automatic file renaming", action="set_auto_rename", risk="risky", requires_confirmation=True, args={"enabled": not any(word in low for word in ("disable", "off", "stop"))}, confidence=0.85)
+        if any(word in low for word in ("list filters", "show filters")):
+            return Plan(intent="list_filters", summary="List group filters", action="list_filters", risk="safe", confidence=0.9)
+        if any(word in low for word in ("list locks", "show locks")):
+            return Plan(intent="list_locks", summary="List group locks", action="list_locks", risk="safe", confidence=0.9)
         if any(word in low for word in ("queue status", "encoding status", "what is encoding")):
             job_id = next(iter(re.findall(r"\b[0-9a-f]{8,16}\b", low)), "")
             return Plan(intent="queue_status", summary="Show encoding queue status", action="queue_status", risk="safe", args={"job_id": job_id}, missing=[] if job_id else ["Provide or select an encoding job ID"], confidence=0.9)
@@ -168,6 +186,23 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             return Plan(intent="create_skill", summary="Create a custom trigger skill", action="create_skill", risk="risky", requires_confirmation=True, args={"description": value}, confidence=0.8)
         if "list skills" in low or "what skills" in low:
             return Plan(intent="list_skills", summary="List enabled skills", action="list_skills", confidence=0.9)
+        if any(word in low for word in ("demote", "remove admin", "take away admin")):
+            if not target_id:
+                return Plan(intent="demote_user", summary="Demote a user", action="demote_user", risk="dangerous", missing=["Reply to the target user’s message or provide their numeric user ID"], confidence=0.8)
+            return Plan(intent="demote_user", summary=f"Demote user {target_id}", action="demote_user", risk="dangerous", requires_confirmation=True, args={"user_id": int(target_id)}, confidence=0.85)
+        if any(word in low for word in ("promote", "make admin", "promote this user")):
+            if not target_id:
+                return Plan(intent="promote_user", summary="Promote a user", action="promote_user", risk="dangerous", missing=["Reply to the target user’s message or provide their numeric user ID"], confidence=0.8)
+            return Plan(intent="promote_user", summary=f"Promote user {target_id}", action="promote_user", risk="dangerous", requires_confirmation=True, args={"user_id": int(target_id)}, confidence=0.85)
+        if any(word in low for word in ("unban", "unblock")):
+            if not target_id:
+                return Plan(intent="unban_user", summary="Unban a user", action="unban_user", risk="dangerous", missing=["Reply to the target user’s message or provide their numeric user ID"], confidence=0.8)
+            return Plan(intent="unban_user", summary=f"Unban user {target_id}", action="unban_user", risk="dangerous", requires_confirmation=True, args={"user_id": int(target_id)}, confidence=0.85)
+        if "purge" in low or "delete the last" in low and "messages" in low:
+            count = next(iter(re.findall(r"\b(\d{1,3})\b", low)), "10")
+            return Plan(intent="purge_messages", summary=f"Delete the last {count} messages", action="purge_messages", risk="dangerous", requires_confirmation=True, args={"count": min(100, int(count))}, confidence=0.8)
+        if any(word in low for word in ("report this", "report user", "send a report")):
+            return Plan(intent="report_user", summary="Report a user to group moderators", action="report_user", risk="risky", requires_confirmation=False, args={"reason": value}, confidence=0.8)
         if any(word in low for word in ("ban", "block permanently")):
             if not target_id:
                 return Plan(intent="ban_user", summary="Ban a user", action="ban_user", risk="dangerous", missing=["Reply to the user’s message or provide a numeric Telegram user ID"], confidence=0.8)

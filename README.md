@@ -56,6 +56,45 @@ For advanced multi-model routing, set `LILY_AI_PROFILES_JSON`. Each profile may 
 
 Search results are stored in short-lived, owner-bound pagination sessions. Lily renders a page of results with previous, next, refresh, and close buttons, and rejects button presses from other users. Encoding jobs are persisted in SQLite with queued, running, completed, failed, and cancelled states. After approval, an encode request enters the background queue and receives refresh/cancel controls. A cancelled queued job is skipped before the worker starts it; a running job’s task is cancelled and its state is recorded.
 
+## Expanded agent tools
+
+Lily now supports richer Rose-style operations through ordinary language: promote, demote, ban, unban, kick, mute, warn, purge, filters, locks, notes, reports, and a confirmation gate for risky changes. The promotion profile intentionally omits promotion rights, so a newly promoted moderator cannot promote other accounts. The `auto_rename_enabled` and `auto_rename_template` chat settings can rename bare uploads automatically; source extensions are preserved and invalid filename characters are removed.
+
+For streaming, reply to a Lily-managed file and ask for a direct streaming link. Lily downloads the file to managed storage, generates an expiring HMAC-signed URL, and exposes it through the optional FastAPI stream service. Set `LILY_STREAM_PUBLIC_BASE_URL` to an HTTPS reverse-proxy URL before enabling this feature. Do not expose the stream port directly to the internet or use it for files outside Lily’s managed work/download directories.
+
+For web search, Lily uses the configured search endpoint and returns rich result tables plus expandable snippets. The default is DuckDuckGo’s Instant Answer endpoint; configure an alternative compatible provider if you need broader coverage.
+
+## Image and video generation
+
+Lily has provider-neutral image and video generation adapters. Set `LILY_IMAGE_GENERATION_URL` or `LILY_VIDEO_GENERATION_URL` and the matching API key for an authorized provider. Each endpoint receives a `prompt`, `aspect_ratio`, and `kind`; video requests also receive `duration_seconds`. The provider must return a top-level `url`, `output_url`, `image_url`, or `video_url` (or an equivalent first item under `data`/`outputs`). Lily asks for confirmation before a generation request so configured providers are not used accidentally.
+
+## Agent CLI
+
+The same model-aware Lily agent can be used from a terminal after configuration:
+
+```bash
+python3 -m lily.cli status
+python3 -m lily.cli plan "Lily, demote user 12345"
+python3 -m lily.cli ask "Draft a calm moderation message about spam links"
+```
+
+The CLI uses Lily’s configured multi-model fallback router and prints either model health, a strict action plan, or a conversational answer. It does not bypass Telegram permissions; use it for review, debugging, and offline drafting.
+
+## Telegram Mini App
+
+The optional `lily-miniapp/` project is a polished Telegram Web App dashboard for live agent activity, moderation controls, skills, media queues, search, and channel-post preparation. It currently ships as an interface-first companion and reads Telegram’s Web App client script; connecting it to Lily’s live database requires an authenticated backend bridge that verifies Telegram `initData` and exposes only the requesting admin’s group data. Do not trust Mini App client input without that server-side verification.
+
+## Recommended next advanced features
+
+| Feature | Why it matters |
+|---|---|
+| Admin review inbox | Gives every filter hit, report, and AI recommendation one consistent approval place. |
+| Human moderation handoff | Lets Lily create a structured case file with context when it is uncertain rather than guessing. |
+| Per-skill budget policies | Limits expensive generation, search, and media jobs by group, role, day, and month. |
+| Semantic memory search | Retrieves prior rules, decisions, and post drafts by meaning, not only keywords. |
+| Channel calendar | Schedules post drafts, approval windows, and recurring reports in one timeline. |
+| Media library | Indexes Lily-generated links and uploaded content with expiration, access, and retention controls. |
+
 ## Custom skill plugins
 
 Trusted local plugins live in the `plugins/` directory. Each plugin defines a `PLUGIN` manifest with a name, version, description, trigger list, an allow-listed Lily action, risk level, and optional `build_plan(context)` function. A plugin receives text and IDs, not a Telegram Bot object, so all Telegram operations still pass through Lily’s permission and confirmation layer. The included `plugins/hello_skill.py` is a safe example. Do not load untrusted plugin files; Python plugins can execute arbitrary code by design.

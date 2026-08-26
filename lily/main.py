@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from telegram import Update
@@ -9,6 +10,7 @@ from .config import settings
 from .db import db
 from .handlers import help_message, register_handlers, start
 from .queue_manager import encoding_queue
+from .web_media import stream_links
 
 
 logging.basicConfig(
@@ -24,10 +26,21 @@ async def help_handler(update: Update, context) -> None:
 
 async def post_shutdown(application: Application) -> None:
     await encoding_queue.stop()
+    task = application.bot_data.pop("stream_server_task", None)
+    if task:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 async def post_init(application: Application) -> None:
     await db.init()
+    if settings.stream_public_base_url:
+        try:
+            import uvicorn
+            config = uvicorn.Config(stream_links.app(), host=settings.stream_bind_host, port=settings.stream_port, log_level="warning")
+            application.bot_data["stream_server_task"] = asyncio.create_task(uvicorn.Server(config).serve(), name="lily-stream-server")
+        except Exception as exc:
+            logger.warning("Streaming server disabled: %s", exc)
     me = await application.bot.get_me()
     logger.info("Lily started as @%s using %s", me.username, settings.bot_api_base)
 
