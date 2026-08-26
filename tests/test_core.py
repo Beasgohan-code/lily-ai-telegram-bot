@@ -52,6 +52,15 @@ class LilyCoreTests(unittest.TestCase):
         self.assertIsInstance(configured.ai_keys, tuple)
         self.assertIsInstance(configured.ai_bases, tuple)
 
+    def test_curated_preset_profiles_skip_missing_hosted_keys(self):
+        preset_settings = replace(settings, ai_profiles_json="", ai_keys=(), ai_bases=(), openai_api_key="", openai_api_base="", ai_presets=("groq", "ollama", "ovh-anonymous"))
+        with patch.dict("os.environ", {"GROQ_API_KEY": "", "OLLAMA_BASE_URL": "http://127.0.0.1:11434/v1", "OLLAMA_MODEL": "qwen3:8b"}, clear=False):
+            profiles = preset_settings.model_profiles()
+        names = {str(profile["name"]) for profile in profiles}
+        self.assertNotIn("preset-groq", names)
+        self.assertIn("preset-ollama", names)
+        self.assertIn("preset-ovh-anonymous", names)
+
     def test_heuristic_router_understands_channel_post(self):
         plan = AIClient().heuristic_plan("make an anime episode announcement for Dragon Ball", {})
         self.assertEqual(plan.action, "start_channel_post")

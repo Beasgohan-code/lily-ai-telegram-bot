@@ -52,6 +52,12 @@ For fallback support, set `LILY_AI_KEYS` to a comma-separated list of keys. Set 
 
 For advanced multi-model routing, set `LILY_AI_PROFILES_JSON`. Each profile may define `name`, `api_key`, `base_url`, `model`, `family`, `capabilities`, `priority`, and `max_retries`. Lily selects only profiles supporting the requested capability, converts reasoning and token parameters for GPT, Claude, and Gemini families, records success/failure latency, and temporarily cools down unhealthy profiles. `model_status` can report current health in chat.
 
+### Curated free-tier and local presets
+
+Set `LILY_AI_PRESETS` to an ordered, comma-separated selection of `groq`, `openrouter-free`, `ollama`, and optionally `ovh-anonymous`. Lily appends enabled presets after explicit JSON and legacy profiles, so a paid/private primary model remains preferred while a low-cost fallback is available when it fails. The `groq` preset uses the provider’s OpenAI-compatible endpoint and requires `GROQ_API_KEY`; `openrouter-free` requires `OPENROUTER_API_KEY`; and `ollama` targets a local OpenAI-compatible server and requires no real key. `ovh-anonymous` is deliberately chat-only and must never receive private group content, files, credentials, or moderation evidence because it is an anonymous public endpoint.
+
+The exact free models and quotas change frequently, so override model names in environment variables and verify provider terms before production use. The selected fallback sequence should prefer: private primary provider → Groq/OpenRouter with your key → local Ollama → optional anonymous endpoint only for non-sensitive public prompts.
+
 ## Search pagination and encoding queue
 
 Search results are stored in short-lived, owner-bound pagination sessions. Lily renders a page of results with previous, next, refresh, and close buttons, and rejects button presses from other users. Encoding jobs are persisted in SQLite with queued, running, completed, failed, and cancelled states. After approval, an encode request enters the background queue and receives refresh/cancel controls. A cancelled queued job is skipped before the worker starts it; a running job’s task is cancelled and its state is recorded.

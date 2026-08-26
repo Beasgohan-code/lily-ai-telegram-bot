@@ -1,0 +1,9 @@
+- [ ] Decide the always-on deployment target for the Python Telegram bot, FFmpeg worker, local Bot API server, and signed streaming service.
+- [ ] Add Groq, OpenRouter-compatible, Gemini-compatible, and Ollama provider profile templates with capability-aware fallback ordering.
+- [ ] Inspect mnfst/awesome-free-llm-apis and select only documented, stable, provider-compatible free-tier or local endpoints for Lily presets.
+- [ ] Inspect Shubhamsaboo/awesome-llm-apps for independently reusable agent workflow patterns, then implement them through Lily’s permissioned tool registry rather than copying application code.
+- [ ] Add Telegram Mini App `initData` HMAC validation and issue short-lived admin sessions only after server-side verification.
+- [ ] Expose authenticated Lily API endpoints for dashboard status, moderation settings, skills, media queues, search, and channel-post drafts.
+- [ ] Replace Mini App demonstration state with authenticated API loading, optimistic action handling, and error states.
+- [ ] Configure real provider keys, the HTTPS stream URL, and the Mini App URL in BotFather before production use.
+- [ ] Run an end-to-end test with a real test group, test channel, test upload, confirmation callback, and Mini App session.
