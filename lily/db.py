@@ -10,6 +10,7 @@ from typing import Any
 import aiosqlite
 
 from .config import settings
+from .group_controls import control_defaults
 
 
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -28,6 +29,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "monthly_request_limit": settings.monthly_request_limit,
     "daily_bytes_limit": settings.daily_bytes_limit,
     "monthly_bytes_limit": settings.monthly_bytes_limit,
+    "controls": control_defaults(),
 }
 
 
@@ -163,6 +165,30 @@ class Database:
                     started_at INTEGER,
                     finished_at INTEGER
                 );
+                CREATE TABLE IF NOT EXISTS trusted_members (
+                    chat_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    added_by INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    PRIMARY KEY(chat_id, user_id)
+                );
+                CREATE TABLE IF NOT EXISTS blocked_domains (
+                    chat_id INTEGER NOT NULL,
+                    domain TEXT NOT NULL,
+                    created_by INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    PRIMARY KEY(chat_id, domain)
+                );
+                CREATE TABLE IF NOT EXISTS moderation_reports (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    reporter_id INTEGER NOT NULL,
+                    target_user_id INTEGER,
+                    reason TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'open',
+                    created_at INTEGER NOT NULL,
+                    resolved_at INTEGER
+                );
                 """
             )
             await db.commit()
@@ -183,11 +209,16 @@ class Database:
                 values = json.loads(row["settings_json"])
             except json.JSONDecodeError:
                 values = dict(DEFAULT_SETTINGS)
-            return {**DEFAULT_SETTINGS, **values}
+            merged = {**DEFAULT_SETTINGS, **values}
+            merged["controls"] = {**DEFAULT_SETTINGS["controls"], **(values.get("controls") if isinstance(values.get("controls"), dict) else {})}
+            return merged
 
     async def update_chat_settings(self, chat_id: int, patch: dict[str, Any], title: str = "") -> dict[str, Any]:
         current = await self.get_chat_settings(chat_id, title)
+        controls_patch = patch.pop("controls", None) if "controls" in patch else None
         current.update(patch)
+        if isinstance(controls_patch, dict):
+            current["controls"] = {**current.get("controls", {}), **controls_patch}
         async with self.connect() as db:
             await db.execute(
                 "UPDATE chats SET settings_json=?,title=?,updated_at=? WHERE chat_id=?",
@@ -195,6 +226,87 @@ class Database:
             )
             await db.commit()
         return current
+
+    async def set_control(self, chat_id: int, key: str, enabled: bool, title: str = "") -> dict[str, Any]:
+        return await self.update_chat_settings(chat_id, {"controls": {key: bool(enabled)}}, title)
+
+    async def get_controls(self, chat_id: int, title: str = "") -> dict[str, bool]:
+        values = await self.get_chat_settings(chat_id, title)
+        return dict(values.get("controls", {}))
+
+    async def set_trusted_member(self, chat_id: int, user_id: int, actor_id: int, trusted: bool) -> bool:
+        async with self.connect() as db:
+            if trusted:
+                await db.execute("INSERT INTO trusted_members(chat_id,user_id,added_by,created_at) VALUES(?,?,?,?) ON CONFLICT(chat_id,user_id) DO UPDATE SET added_by=excluded.added_by", (chat_id, user_id, actor_id, int(time.time())))
+                await db.commit()
+                return True
+            cursor = await db.execute("DELETE FROM trusted_members WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+            await db.commit()
+            return cursor.rowcount == 1
+
+    async def is_trusted_member(self, chat_id: int, user_id: int) -> bool:
+        async with self.connect() as db:
+            row = await (await db.execute("SELECT 1 FROM trusted_members WHERE chat_id=? AND user_id=?", (chat_id, user_id))).fetchone()
+            return row is not None
+
+    async def list_trusted_members(self, chat_id: int) -> list[dict[str, Any]]:
+        async with self.connect() as db:
+            rows = await (await db.execute("SELECT * FROM trusted_members WHERE chat_id=? ORDER BY created_at", (chat_id,))).fetchall()
+            return [dict(row) for row in rows]
+
+    async def set_blocked_domain(self, chat_id: int, domain: str, actor_id: int, blocked: bool) -> bool:
+        cleaned = domain.lower().replace("https://", "").replace("http://", "").split("/")[0].strip()
+        if not cleaned:
+            return False
+        async with self.connect() as db:
+            if blocked:
+                await db.execute("INSERT INTO blocked_domains(chat_id,domain,created_by,created_at) VALUES(?,?,?,?) ON CONFLICT(chat_id,domain) DO UPDATE SET created_by=excluded.created_by", (chat_id, cleaned, actor_id, int(time.time())))
+                await db.commit()
+                return True
+            cursor = await db.execute("DELETE FROM blocked_domains WHERE chat_id=? AND domain=?", (chat_id, cleaned))
+            await db.commit()
+            return cursor.rowcount == 1
+
+    async def list_blocked_domains(self, chat_id: int) -> list[str]:
+        async with self.connect() as db:
+            rows = await (await db.execute("SELECT domain FROM blocked_domains WHERE chat_id=? ORDER BY domain", (chat_id,))).fetchall()
+            return [str(row["domain"]) for row in rows]
+
+    async def create_report(self, chat_id: int, reporter_id: int, target_user_id: int | None, reason: str) -> int:
+        async with self.connect() as db:
+            cursor = await db.execute("INSERT INTO moderation_reports(chat_id,reporter_id,target_user_id,reason,created_at) VALUES(?,?,?,?,?)", (chat_id, reporter_id, target_user_id, reason[:1000], int(time.time())))
+            await db.commit()
+            return int(cursor.lastrowid)
+
+    async def list_reports(self, chat_id: int, status: str = "open", limit: int = 30) -> list[dict[str, Any]]:
+        async with self.connect() as db:
+            rows = await (await db.execute("SELECT * FROM moderation_reports WHERE chat_id=? AND status=? ORDER BY id DESC LIMIT ?", (chat_id, status, limit))).fetchall()
+            return [dict(row) for row in rows]
+
+    async def resolve_report(self, chat_id: int, report_id: int) -> bool:
+        async with self.connect() as db:
+            cursor = await db.execute("UPDATE moderation_reports SET status='resolved',resolved_at=? WHERE chat_id=? AND id=? AND status='open'", (int(time.time()), chat_id, report_id))
+            await db.commit()
+            return cursor.rowcount == 1
+
+    async def clear_warnings(self, chat_id: int, user_id: int) -> int:
+        async with self.connect() as db:
+            cursor = await db.execute("DELETE FROM warnings WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+            await db.commit()
+            return cursor.rowcount
+
+    async def recent_audit(self, chat_id: int, limit: int = 50) -> list[dict[str, Any]]:
+        async with self.connect() as db:
+            rows = await (await db.execute("SELECT * FROM audit_log WHERE chat_id=? ORDER BY id DESC LIMIT ?", (chat_id, limit))).fetchall()
+            result = []
+            for row in rows:
+                item = dict(row)
+                try:
+                    item["detail"] = json.loads(item.pop("detail_json"))
+                except json.JSONDecodeError:
+                    item["detail"] = {}
+                result.append(item)
+            return result
 
     async def _usage(self, scope: str, scope_id: int, field: str, amount: int, daily: int, monthly: int) -> tuple[bool, str]:
         now = time.gmtime()

@@ -18,6 +18,7 @@ class ModelProfile:
     capabilities: frozenset[str] = frozenset({"chat", "structured", "reasoning"})
     priority: int = 100
     max_retries: int = 1
+    privacy_tier: str = "hosted"
 
     @property
     def key_id(self) -> str:
@@ -48,8 +49,10 @@ class ModelRouter:
         self._lock = asyncio.Lock()
         self._cursor = 0
 
-    def candidates(self, requirement: str = "chat") -> list[ModelProfile]:
+    def candidates(self, requirement: str = "chat", allow_public: bool = False) -> list[ModelProfile]:
         eligible = [profile for profile in self.profiles if requirement in profile.capabilities or requirement == "chat" and "chat" in profile.capabilities]
+        if not allow_public:
+            eligible = [profile for profile in eligible if profile.privacy_tier != "public"]
         available = [profile for profile in eligible if self.health[profile.key_id].available]
         if available:
             return available
@@ -94,25 +97,80 @@ class ModelRouter:
         state.last_error = ""
         state.last_latency_ms = latency_ms
 
+    @staticmethod
+    def _plain_messages(messages: list[dict[str, Any]]) -> str:
+        return "\n\n".join(f"{str(message.get('role', 'user')).upper()}: {message.get('content', '')}" for message in messages)
+
+    def _cohere_request(self, profile: ModelProfile, payload: dict[str, Any]) -> tuple[str, dict[str, str], dict[str, Any]]:
+        request = self._family_payload(profile, payload)
+        request.pop("max_completion_tokens", None)
+        request["max_tokens"] = int(payload.get("max_completion_tokens", payload.get("max_tokens", 1200)))
+        response_format = request.pop("response_format", None)
+        if isinstance(response_format, dict) and response_format.get("type") == "json_schema":
+            schema = response_format.get("json_schema", {}).get("schema", {})
+            request["response_format"] = {"type": "json_object", "json_schema": schema}
+        request["stream"] = False
+        return f"{profile.base_url.rstrip('/')}/chat", {"Authorization": f"Bearer {profile.api_key}", "Content-Type": "application/json"}, request
+
+    def _gemini_request(self, profile: ModelProfile, payload: dict[str, Any]) -> tuple[str, dict[str, str], dict[str, Any]]:
+        system_messages = [str(message.get("content", "")) for message in payload.get("messages", []) if message.get("role") == "system"]
+        contents = [{"role": "model" if message.get("role") == "assistant" else "user", "parts": [{"text": str(message.get("content", ""))}]} for message in payload.get("messages", []) if message.get("role") != "system"]
+        generation: dict[str, Any] = {"maxOutputTokens": int(payload.get("max_completion_tokens", payload.get("max_tokens", 1200)))}
+        if isinstance(payload.get("response_format"), dict):
+            generation["responseMimeType"] = "application/json"
+        request: dict[str, Any] = {"contents": contents, "generationConfig": generation}
+        if system_messages:
+            request["systemInstruction"] = {"parts": [{"text": "\n".join(system_messages)}]}
+        endpoint = f"{profile.base_url.rstrip('/')}/models/{profile.model}:generateContent?key={profile.api_key}"
+        return endpoint, {"Content-Type": "application/json"}, request
+
+    def _cloudflare_request(self, profile: ModelProfile, payload: dict[str, Any]) -> tuple[str, dict[str, str], dict[str, Any]]:
+        endpoint = f"{profile.base_url.rstrip('/')}/{profile.model}"
+        return endpoint, {"Authorization": f"Bearer {profile.api_key}", "Content-Type": "application/json"}, {"prompt": self._plain_messages(payload.get("messages", []))}
+
+    @staticmethod
+    def _normalize_response(profile: ModelProfile, response: dict[str, Any]) -> dict[str, Any]:
+        if profile.family == "cohere":
+            blocks = response.get("message", {}).get("content", [])
+            text = "".join(str(block.get("text", "")) for block in blocks if isinstance(block, dict))
+            return {"choices": [{"message": {"content": text}}], "provider_response": response}
+        if profile.family == "gemini_native":
+            parts = response.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+            text = "".join(str(part.get("text", "")) for part in parts if isinstance(part, dict))
+            return {"choices": [{"message": {"content": text}}], "provider_response": response}
+        if profile.family == "cloudflare":
+            text = str(response.get("result", {}).get("response", ""))
+            return {"choices": [{"message": {"content": text}}], "provider_response": response}
+        return response
+
+    def _endpoint(self, profile: ModelProfile, payload: dict[str, Any]) -> tuple[str, dict[str, str], dict[str, Any]]:
+        if profile.family == "cohere":
+            return self._cohere_request(profile, payload)
+        if profile.family == "gemini_native":
+            return self._gemini_request(profile, payload)
+        if profile.family == "cloudflare":
+            return self._cloudflare_request(profile, payload)
+        return f"{profile.base_url.rstrip('/')}/chat/completions", {"Authorization": f"Bearer {profile.api_key}", "Content-Type": "application/json"}, self._family_payload(profile, payload)
+
     async def chat(self, payload: dict[str, Any], requirement: str = "chat") -> tuple[dict[str, Any], ModelProfile]:
         if not self.profiles:
             raise RuntimeError("No AI model profiles are configured")
-        candidates = self.candidates(requirement)
+        candidates = self.candidates(requirement, allow_public=bool(payload.get("_allow_public_fallback", False)))
         if not candidates:
             raise RuntimeError(f"No configured model supports capability: {requirement}")
         last_error: Exception | None = None
         for profile in candidates:
-            request = self._family_payload(profile, payload)
+            endpoint, headers, request = self._endpoint(profile, payload)
             for attempt in range(profile.max_retries + 1):
                 started = time.perf_counter()
                 try:
                     timeout = httpx.Timeout(float(payload.get("_timeout", 45.0)), connect=10.0)
                     async with httpx.AsyncClient(timeout=timeout) as client:
-                        response = await client.post(f"{profile.base_url.rstrip('/')}/chat/completions", headers={"Authorization": f"Bearer {profile.api_key}", "Content-Type": "application/json"}, json=request)
+                        response = await client.post(endpoint, headers=headers, json=request)
                         if response.status_code in {401, 403, 408, 409, 429} or response.status_code >= 500:
                             raise RuntimeError(f"{profile.key_id} returned HTTP {response.status_code}")
                         response.raise_for_status()
-                        data = response.json()
+                        data = self._normalize_response(profile, response.json())
                     await self._mark_success(profile, (time.perf_counter() - started) * 1000)
                     return data, profile
                 except Exception as exc:
@@ -127,5 +185,5 @@ class ModelRouter:
         async with self._lock:
             for profile in self.profiles:
                 state = self.health[profile.key_id]
-                result.append({"name": profile.name, "model": profile.model, "family": profile.family, "capabilities": sorted(profile.capabilities), "priority": profile.priority, "available": state.available, "failures": state.failures, "successes": state.successes, "last_error": state.last_error, "last_latency_ms": round(state.last_latency_ms, 1)})
+                result.append({"name": profile.name, "model": profile.model, "family": profile.family, "privacy_tier": profile.privacy_tier, "capabilities": sorted(profile.capabilities), "priority": profile.priority, "available": state.available, "failures": state.failures, "successes": state.successes, "last_error": state.last_error, "last_latency_ms": round(state.last_latency_ms, 1)})
         return result

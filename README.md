@@ -54,13 +54,19 @@ For advanced multi-model routing, set `LILY_AI_PROFILES_JSON`. Each profile may 
 
 ### Curated free-tier and local presets
 
-Set `LILY_AI_PRESETS` to an ordered, comma-separated selection of `groq`, `openrouter-free`, `ollama`, and optionally `ovh-anonymous`. Lily appends enabled presets after explicit JSON and legacy profiles, so a paid/private primary model remains preferred while a low-cost fallback is available when it fails. The `groq` preset uses the provider’s OpenAI-compatible endpoint and requires `GROQ_API_KEY`; `openrouter-free` requires `OPENROUTER_API_KEY`; and `ollama` targets a local OpenAI-compatible server and requires no real key. `ovh-anonymous` is deliberately chat-only and must never receive private group content, files, credentials, or moderation evidence because it is an anonymous public endpoint.
+Set `LILY_AI_PRESETS` to an ordered, comma-separated selection such as `groq,openrouter-free,ollama-local`, or use `all` to expose every catalogued provider for which the needed runtime credential is present. Set `LILY_ENABLE_ALL_CATALOG_MODELS=true` only when you intentionally want every listed model registered as a fallback candidate. Lily preserves explicit JSON profiles as the highest-priority options and then appends preset profiles, so a private primary model remains preferred.
 
-The exact free models and quotas change frequently, so override model names in environment variables and verify provider terms before production use. The selected fallback sequence should prefer: private primary provider → Groq/OpenRouter with your key → local Ollama → optional anonymous endpoint only for non-sensitive public prompts.
+The vendored CC0 catalog covers Aion Labs, Cohere, Gemini, Mistral, Z AI, Cloudflare Workers AI, Groq, Hugging Face, Kilo, LLM7, ModelScope, NVIDIA NIM, Ollama Cloud, OpenRouter, OVHcloud, SiliconFlow, and local Ollama. Cohere, Gemini, and Cloudflare use native adapter families; compatible providers use Lily’s OpenAI-style router. `LILY_ALLOW_PUBLIC_AI_FALLBACKS=false` blocks public or anonymous profiles by default, so Kilo, LLM7, OpenRouter free routing, and OVH anonymous mode cannot receive group memory, files, moderation evidence, or other sensitive context until an administrator deliberately opts in.
 
 ## Search pagination and encoding queue
 
 Search results are stored in short-lived, owner-bound pagination sessions. Lily renders a page of results with previous, next, refresh, and close buttons, and rejects button presses from other users. Encoding jobs are persisted in SQLite with queued, running, completed, failed, and cancelled states. After approval, an encode request enters the background queue and receives refresh/cancel controls. A cancelled queued job is skipped before the worker starts it; a running job’s task is cancelled and its state is recorded.
+
+## AI-first group controls
+
+Lily now ships a **60-control group-management catalogue** that an admin operates in normal language. The categories cover member governance, member moderation, content locks, anti-spam, rules and automations, and privacy/intelligence. Examples include: “Enable caps control”, “Disable forward lock”, “Trust this member”, “Block domain example.com”, “Show group controls”, “Show open reports”, “Resolve report 12”, and “Approve join request for 123456789”. Member-affecting actions, policy changes, mass deletion, and join decisions remain confirmation-gated and Lily also checks its own Telegram rights before execution.
+
+The current live policy engine enforces locks, forwarded-message restrictions, blocked domains, duplicate text, caps spam, excessive mentions, filters, flood control, trusted-member exemptions, warning records, reports, and audit events. Additional controls are persisted as safe policy toggles, ready for their matching Telegram event or scheduled-worker integrations.
 
 ## Expanded agent tools
 

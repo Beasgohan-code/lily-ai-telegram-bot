@@ -23,6 +23,7 @@ from .queue_manager import encoding_queue
 from .web_media import stream_links, web_search
 from .messaging import send_long_rich
 from .media_generation import media_generation
+from .group_controls import GROUP_CONTROL_MAP, control_summary
 
 
 tools = LilyTools(db)
@@ -31,6 +32,7 @@ ADMIN_ACTIONS = {
     "ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "demote_user", "promote_user", "delete_message", "purge_messages", "report_user", "pin_message",
     "set_settings", "create_skill", "set_group_rules", "start_channel_post", "publish_channel_post", "delete_last_post",
     "warn_user", "add_filter", "remove_filter", "set_lock", "save_note", "list_notes", "search_posts", "show_warnings", "set_auto_rename", "stream_link",
+    "configure_group_control", "group_controls_status", "trusted_member", "block_domain", "list_domains", "clear_warnings", "set_admin_title", "approve_join_request", "decline_join_request", "list_reports", "resolve_report", "audit_log",
 }
 
 
@@ -279,9 +281,11 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         return f"Purged {deleted} message(s)."
     if action == "report_user":
         reason = str(plan.args.get("reason") or "Reported by a group member")
-        target = _reply_context(update).get("reply", {}).get("user_name", "the replied user")
-        await db.audit(chat_id, user_id, "report_user", {"target": target, "reason": reason})
-        return f"Report recorded for {target}. Group admins can review the audit log."
+        reply_context = _reply_context(update).get("reply", {})
+        target = reply_context.get("user_name", "the replied user")
+        report_id = await db.create_report(chat_id, user_id, reply_context.get("user_id"), reason)
+        await db.audit(chat_id, user_id, "report_user", {"target": target, "reason": reason, "report_id": report_id})
+        return f"Report #{report_id} was recorded for {target}. Group admins can review it."
     if action == "pin_message":
         await update.get_bot().pin_chat_message(chat_id, int(plan.args.get("message_id", update.effective_message.message_id)), disable_notification=True)
         return "The message was pinned."
@@ -292,6 +296,70 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
             return "Tell me which setting you want to change."
         await db.update_chat_settings(chat_id, patch, update.effective_chat.title or "")
         return "The group settings were updated."
+    if action == "configure_group_control":
+        key = str(plan.args.get("control") or "").lower().replace(" ", "_")
+        control = GROUP_CONTROL_MAP.get(key)
+        if not control:
+            return "That is not a recognised Lily group control. Ask Lily to show the group controls first."
+        enabled = bool(plan.args.get("enabled", True))
+        await db.set_control(chat_id, key, enabled, update.effective_chat.title or "")
+        if key in {"links", "documents", "photos", "videos", "audio", "animations", "stickers", "polls", "contacts", "locations"}:
+            await db.set_lock(chat_id, key, enabled)
+        await db.audit(chat_id, user_id, "configure_group_control", {"control": key, "enabled": enabled})
+        return f"{control.label} is now {'enabled' if enabled else 'disabled'}."
+    if action == "group_controls_status":
+        controls = await db.get_controls(chat_id, update.effective_chat.title or "")
+        rows = [["Control", "State", "Risk"]]
+        for category, items in control_summary().items():
+            rows.append([f"— {category}", "", ""])
+            rows.extend([[item.label, "Enabled" if controls.get(item.key, item.default_enabled) else "Disabled", item.risk.title()] for item in items])
+        await rich.send(chat_id, [heading("Lily group controls", 1), paragraph(f"{len(GROUP_CONTROL_MAP)} controls are available. Tell Lily to enable or disable any one in normal chat."), table(rows), details("Control examples", [paragraph("“Enable caps control”, “Disable link lock”, “Trust this member”, “Block domain example.com”, or “Show open reports”.")])], reply_to=update.effective_message.message_id)
+        return "Displayed the group-control matrix."
+    if action == "trusted_member":
+        target = int(plan.args.get("user_id") or _reply_context(update).get("reply", {}).get("user_id"))
+        trusted = bool(plan.args.get("trusted", True))
+        await db.set_trusted_member(chat_id, target, user_id, trusted)
+        await db.audit(chat_id, user_id, "trusted_member", {"user_id": target, "trusted": trusted})
+        return f"User {target} is {'now' if trusted else 'no longer'} a trusted member."
+    if action == "block_domain":
+        domain = str(plan.args.get("domain") or "")
+        blocked = bool(plan.args.get("blocked", True))
+        if not domain:
+            return "Provide the domain to block or unblock."
+        await db.set_blocked_domain(chat_id, domain, user_id, blocked)
+        await db.audit(chat_id, user_id, "block_domain", {"domain": domain, "blocked": blocked})
+        return f"Domain {domain} is {'blocked' if blocked else 'allowed'} for this group."
+    if action == "list_domains":
+        domains = await db.list_blocked_domains(chat_id)
+        return "\n".join(f"• {domain}" for domain in domains) or "No domains are blocked."
+    if action == "clear_warnings":
+        target = int(plan.args.get("user_id") or _reply_context(update).get("reply", {}).get("user_id"))
+        deleted = await db.clear_warnings(chat_id, target)
+        await db.audit(chat_id, user_id, "clear_warnings", {"user_id": target, "cleared": deleted})
+        return f"Cleared {deleted} warning(s) for user {target}."
+    if action == "set_admin_title":
+        target = int(plan.args.get("user_id") or _reply_context(update).get("reply", {}).get("user_id"))
+        title = str(plan.args.get("title") or "")[:16]
+        await update.get_bot().set_chat_administrator_custom_title(chat_id, target, title)
+        await db.audit(chat_id, user_id, "set_admin_title", {"user_id": target, "title": title})
+        return f"Updated administrator title for user {target}."
+    if action in {"approve_join_request", "decline_join_request"}:
+        target = int(plan.args.get("user_id") or _reply_context(update).get("reply", {}).get("user_id"))
+        if action == "approve_join_request":
+            await update.get_bot().approve_chat_join_request(chat_id, target)
+        else:
+            await update.get_bot().decline_chat_join_request(chat_id, target)
+        await db.audit(chat_id, user_id, action, {"user_id": target})
+        return f"Join request for {target} was {'approved' if action == 'approve_join_request' else 'declined'}."
+    if action == "list_reports":
+        reports = await db.list_reports(chat_id)
+        return "\n".join(f"• #{item['id']} — user {item['target_user_id'] or 'unknown'} — {item['reason']}" for item in reports)[:3500] or "No open reports."
+    if action == "resolve_report":
+        report_id = int(plan.args.get("report_id") or 0)
+        return f"Report #{report_id} was resolved." if report_id and await db.resolve_report(chat_id, report_id) else "That open report was not found."
+    if action == "audit_log":
+        events = await db.recent_audit(chat_id, limit=30)
+        return "\n".join(f"• {item['event']} — {json.dumps(item.get('detail', {}), ensure_ascii=False)[:160]}" for item in events)[:3500] or "No Lily audit events are recorded yet."
     if action == "plugin_reply":
         return str(plan.args.get("text") or plan.summary)[:3500]
     if action == "model_status":
@@ -366,6 +434,8 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         content_type = str(plan.args.get("content_type") or "links").lower()
         enabled = bool(plan.args.get("enabled", True))
         await db.set_lock(chat_id, content_type, enabled)
+        if content_type in GROUP_CONTROL_MAP:
+            await db.set_control(chat_id, content_type, enabled, update.effective_chat.title or "")
         return f"The {content_type} lock is now {'enabled' if enabled else 'disabled'}."
     if action == "save_note":
         name = str(plan.args.get("name") or "general")

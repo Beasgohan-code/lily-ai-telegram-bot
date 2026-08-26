@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .config import settings
+from .group_controls import GROUP_CONTROL_MAP
 from .model_router import ModelProfile, ModelRouter
 
 
@@ -19,6 +20,7 @@ ACTIONS = {
     "start_channel_post", "publish_channel_post", "delete_last_post",
     "add_filter", "remove_filter", "set_lock", "save_note", "list_notes", "search_posts", "show_warnings",
     "plugin_reply", "model_status", "queue_status", "queue_list", "cancel_queue_job", "web_search", "stream_link", "set_auto_rename", "list_filters", "list_locks",
+    "configure_group_control", "group_controls_status", "trusted_member", "block_domain", "list_domains", "clear_warnings", "set_admin_title", "approve_join_request", "decline_join_request", "list_reports", "resolve_report", "audit_log",
 }
 
 RISK = {"safe", "risky", "dangerous"}
@@ -69,6 +71,7 @@ class AIClient:
                 capabilities=frozenset(str(value) for value in capabilities),
                 priority=int(item.get("priority", index)),
                 max_retries=max(0, int(item.get("max_retries", 1))),
+                privacy_tier=str(item.get("privacy_tier", "hosted")),
             ))
         self.router = ModelRouter(profiles, settings.model_cooldown_base, settings.model_cooldown_max)
 
@@ -106,7 +109,7 @@ Never call tools yourself. Output only the JSON schema.
 Available actions: {', '.join(sorted(ACTIONS))}.
 Dangerous actions include banning, kicking, muting, deleting, pinning, changing rules/settings, publishing or deleting channel posts, external downloads, and expensive or large file processing.
 Set requires_confirmation=true for any risky or dangerous action. Require an explicit reply target or numeric user id for moderation. For download_song, require a direct permitted URL and include rights_confirmed=false until the user explicitly confirms they have permission.
-For create_skill, put a structured trigger in args.trigger and a structured action in args.action; ask for missing fields when unclear. For add_filter, use args.trigger and optional args.response/delete_message/warn. For set_lock, use args.content_type and args.enabled. For save_note, use args.name and args.content. For search_posts, use args.channel_id and args.query. For plugin_reply, use args.text.
+For create_skill, put a structured trigger in args.trigger and a structured action in args.action; ask for missing fields when unclear. For add_filter, use args.trigger and optional args.response/delete_message/warn. For set_lock, use args.content_type and args.enabled. For configure_group_control, use args.control and args.enabled. For trusted_member, set args.user_id and args.trusted. For block_domain, set args.domain and args.blocked. For save_note, use args.name and args.content. For search_posts, use args.channel_id and args.query. For plugin_reply, use args.text.
 Group settings: {json.dumps(chat_settings, ensure_ascii=False)}
 Recent memory: {json.dumps(memories, ensure_ascii=False)}
 """
@@ -170,6 +173,52 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             return Plan(intent="list_filters", summary="List group filters", action="list_filters", risk="safe", confidence=0.9)
         if any(word in low for word in ("list locks", "show locks")):
             return Plan(intent="list_locks", summary="List group locks", action="list_locks", risk="safe", confidence=0.9)
+        if any(word in low for word in ("group controls", "control status", "show moderation settings", "show group settings")):
+            return Plan(intent="group_controls_status", summary="Show group control status", action="group_controls_status", risk="safe", confidence=0.9)
+        if any(word in low for word in ("list reports", "show reports", "open reports")):
+            return Plan(intent="list_reports", summary="Show open moderation reports", action="list_reports", risk="safe", confidence=0.9)
+        if any(word in low for word in ("resolve report", "close report")):
+            report_id = next(iter(re.findall(r"\b(\d+)\b", low)), "")
+            return Plan(intent="resolve_report", summary=f"Resolve report {report_id or ''}".strip(), action="resolve_report", risk="risky", requires_confirmation=True, args={"report_id": int(report_id) if report_id else 0}, missing=[] if report_id else ["Provide the report number"], confidence=0.85)
+        if any(word in low for word in ("audit log", "show audit", "recent actions")):
+            return Plan(intent="audit_log", summary="Show recent Lily audit events", action="audit_log", risk="safe", confidence=0.9)
+        if any(word in low for word in ("approve join", "approve request", "accept join")):
+            if not target_id:
+                return Plan(intent="approve_join_request", summary="Approve a join request", action="approve_join_request", risk="dangerous", missing=["Provide the requester's numeric user ID"], confidence=0.8)
+            return Plan(intent="approve_join_request", summary=f"Approve join request for {target_id}", action="approve_join_request", risk="dangerous", requires_confirmation=True, args={"user_id": int(target_id)}, confidence=0.85)
+        if any(word in low for word in ("decline join", "reject join", "decline request")):
+            if not target_id:
+                return Plan(intent="decline_join_request", summary="Decline a join request", action="decline_join_request", risk="dangerous", missing=["Provide the requester's numeric user ID"], confidence=0.8)
+            return Plan(intent="decline_join_request", summary=f"Decline join request for {target_id}", action="decline_join_request", risk="dangerous", requires_confirmation=True, args={"user_id": int(target_id)}, confidence=0.85)
+        if "admin title" in low or "custom title" in low:
+            title_match = re.search(r"(?:title\s+(?:to|as)|call them)\s+[\"']?([^\"']+?)(?:[\"']?$|\s+for\s+user)", value, re.I)
+            if not target_id:
+                return Plan(intent="set_admin_title", summary="Set an administrator title", action="set_admin_title", risk="dangerous", missing=["Reply to the administrator or provide their numeric user ID"], confidence=0.75)
+            return Plan(intent="set_admin_title", summary=f"Set the admin title for {target_id}", action="set_admin_title", risk="dangerous", requires_confirmation=True, args={"user_id": int(target_id), "title": title_match.group(1).strip() if title_match else "Moderator"}, confidence=0.8)
+        if any(word in low for word in ("make trusted", "trust this user", "add trusted")):
+            if not target_id:
+                return Plan(intent="trusted_member", summary="Trust a member", action="trusted_member", risk="dangerous", missing=["Reply to the member or provide their numeric user ID"], confidence=0.8)
+            return Plan(intent="trusted_member", summary=f"Trust member {target_id}", action="trusted_member", risk="dangerous", requires_confirmation=True, args={"user_id": int(target_id), "trusted": True}, confidence=0.85)
+        if any(word in low for word in ("remove trusted", "untrust this user", "untrust")):
+            if not target_id:
+                return Plan(intent="trusted_member", summary="Remove a trusted member", action="trusted_member", risk="dangerous", missing=["Reply to the member or provide their numeric user ID"], confidence=0.8)
+            return Plan(intent="trusted_member", summary=f"Remove trust for member {target_id}", action="trusted_member", risk="dangerous", requires_confirmation=True, args={"user_id": int(target_id), "trusted": False}, confidence=0.85)
+        domain = next(iter(re.findall(r"(?:https?://)?([A-Za-z0-9.-]+\.[A-Za-z]{2,})", value)), "")
+        if domain and any(word in low for word in ("block domain", "ban domain", "blacklist domain")):
+            return Plan(intent="block_domain", summary=f"Block domain {domain}", action="block_domain", risk="risky", requires_confirmation=True, args={"domain": domain, "blocked": True}, confidence=0.85)
+        if domain and any(word in low for word in ("unblock domain", "allow domain", "remove domain")):
+            return Plan(intent="block_domain", summary=f"Unblock domain {domain}", action="block_domain", risk="risky", requires_confirmation=True, args={"domain": domain, "blocked": False}, confidence=0.85)
+        if any(word in low for word in ("list blocked domains", "show blocked domains", "list domains")):
+            return Plan(intent="list_domains", summary="List blocked domains", action="list_domains", risk="safe", confidence=0.9)
+        if any(word in low for word in ("clear warnings", "reset warnings", "remove warnings")):
+            if not target_id:
+                return Plan(intent="clear_warnings", summary="Clear a member’s warnings", action="clear_warnings", risk="dangerous", missing=["Reply to the member or provide their numeric user ID"], confidence=0.8)
+            return Plan(intent="clear_warnings", summary=f"Clear warnings for {target_id}", action="clear_warnings", risk="dangerous", requires_confirmation=True, args={"user_id": int(target_id)}, confidence=0.85)
+        for control_key, control in GROUP_CONTROL_MAP.items():
+            terms = (control_key.replace("_", " "), control.label.lower())
+            if any(term in low for term in terms) and any(word in low for word in ("enable", "disable", "turn on", "turn off")):
+                enabled = not any(word in low for word in ("disable", "turn off"))
+                return Plan(intent="configure_group_control", summary=f"{'Enable' if enabled else 'Disable'} {control.label}", action="configure_group_control", risk=control.risk, requires_confirmation=control.risk != "safe", args={"control": control_key, "enabled": enabled}, confidence=0.8)
         if any(word in low for word in ("queue status", "encoding status", "what is encoding")):
             job_id = next(iter(re.findall(r"\b[0-9a-f]{8,16}\b", low)), "")
             return Plan(intent="queue_status", summary="Show encoding queue status", action="queue_status", risk="safe", args={"job_id": job_id}, missing=[] if job_id else ["Provide or select an encoding job ID"], confidence=0.9)
@@ -237,8 +286,9 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             return Plan(intent="channel_post", summary="Create an anime-style channel announcement", action="start_channel_post", risk="dangerous", args={"post_type": "anime_announcement", "request": value}, confidence=0.85)
         if any(word in low for word in ("delete last post", "remove last post", "delete the previous post")):
             return Plan(intent="delete_last_post", summary="Delete Lily’s last tracked channel post", action="delete_last_post", risk="dangerous", requires_confirmation=True, args={}, confidence=0.85)
-        if any(word in low for word in ("lock links", "lock photos", "lock videos", "lock documents", "unlock links", "unlock photos", "unlock videos", "unlock documents")):
-            content_type = next((item for item in ("links", "photos", "videos", "documents") if item in low), "links")
+        lock_types = ("links", "forwards", "photos", "videos", "documents", "audio", "animations", "stickers", "polls", "contacts", "locations")
+        if any(f"lock {item}" in low or f"unlock {item}" in low for item in lock_types):
+            content_type = next((item for item in lock_types if item in low), "links")
             return Plan(intent="set_lock", summary=f"Update the {content_type} lock", action="set_lock", risk="dangerous", requires_confirmation=True, args={"content_type": content_type, "enabled": not low.startswith("unlock")}, confidence=0.8)
         if any(word in low for word in ("add a filter", "create a filter", "when someone says")):
             return Plan(intent="add_filter", summary="Create a group message filter", action="add_filter", risk="risky", requires_confirmation=True, args={}, missing=["trigger", "action"], confidence=0.7)

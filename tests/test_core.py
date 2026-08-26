@@ -18,6 +18,8 @@ from lily.tools import safe_filename
 import lily.web_media as web_media
 from lily.web_media import stream_links
 from lily.config import settings
+from lily.free_models import CATALOG, PRESETS
+from lily.group_controls import GROUP_CONTROLS, GROUP_CONTROL_MAP
 
 
 class LilyCoreTests(unittest.TestCase):
@@ -53,13 +55,13 @@ class LilyCoreTests(unittest.TestCase):
         self.assertIsInstance(configured.ai_bases, tuple)
 
     def test_curated_preset_profiles_skip_missing_hosted_keys(self):
-        preset_settings = replace(settings, ai_profiles_json="", ai_keys=(), ai_bases=(), openai_api_key="", openai_api_base="", ai_presets=("groq", "ollama", "ovh-anonymous"))
+        preset_settings = replace(settings, ai_profiles_json="", ai_keys=(), ai_bases=(), openai_api_key="", openai_api_base="", ai_presets=("groq", "ollama-local", "ovh-anonymous"), allow_public_ai_fallbacks=False)
         with patch.dict("os.environ", {"GROQ_API_KEY": "", "OLLAMA_BASE_URL": "http://127.0.0.1:11434/v1", "OLLAMA_MODEL": "qwen3:8b"}, clear=False):
             profiles = preset_settings.model_profiles()
         names = {str(profile["name"]) for profile in profiles}
         self.assertNotIn("preset-groq", names)
-        self.assertIn("preset-ollama", names)
-        self.assertIn("preset-ovh-anonymous", names)
+        self.assertIn("preset-ollama-local", names)
+        self.assertNotIn("preset-ovh-anonymous", names)
 
     def test_heuristic_router_understands_channel_post(self):
         plan = AIClient().heuristic_plan("make an anime episode announcement for Dragon Ball", {})
@@ -143,6 +145,41 @@ class LilyCoreTests(unittest.TestCase):
                 self.assertEqual((await database.charge_request(7, 1))[0], True)
                 self.assertEqual((await database.charge_request(7, 1))[0], False)
         asyncio.run(run())
+
+    def test_group_control_catalogue_has_sixty_plus_controls(self):
+        self.assertGreaterEqual(len(GROUP_CONTROLS), 60)
+        self.assertIn("domain_blocklist", GROUP_CONTROL_MAP)
+        self.assertIn("join_request_review", GROUP_CONTROL_MAP)
+        self.assertIn("daily_digest", GROUP_CONTROL_MAP)
+
+    def test_group_control_policy_and_moderation_records_persist(self):
+        async def run():
+            with tempfile.TemporaryDirectory() as directory:
+                database = Database(str(Path(directory) / "controls.sqlite3"))
+                await database.init()
+                await database.set_control(1, "caps", True)
+                self.assertTrue((await database.get_controls(1))["caps"])
+                await database.set_trusted_member(1, 88, 7, True)
+                self.assertTrue(await database.is_trusted_member(1, 88))
+                await database.set_blocked_domain(1, "https://spam.example/path", 7, True)
+                self.assertEqual(await database.list_blocked_domains(1), ["spam.example"])
+                report_id = await database.create_report(1, 7, 88, "Repeated spam")
+                self.assertEqual((await database.list_reports(1))[0]["id"], report_id)
+                self.assertTrue(await database.resolve_report(1, report_id))
+        asyncio.run(run())
+
+    def test_heuristic_router_configures_group_control(self):
+        plan = AIClient().heuristic_plan("Lily, enable caps control", {"chat_type": "group", "reply": {}})
+        self.assertEqual(plan.action, "configure_group_control")
+        self.assertEqual(plan.args["control"], "caps")
+        self.assertTrue(plan.args["enabled"])
+
+    def test_complete_free_model_registry_is_present(self):
+        self.assertEqual(len(CATALOG), 16)
+        self.assertGreaterEqual(len(PRESETS), 17)
+        self.assertIn("cohere", PRESETS)
+        self.assertIn("cloudflare-workers-ai", PRESETS)
+        self.assertIn("ollama-local", PRESETS)
 
 
 if __name__ == "__main__":

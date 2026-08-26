@@ -5,6 +5,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .free_models import profiles_for_presets
+
 
 def _bool(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
@@ -49,6 +51,8 @@ class Settings:
     ai_reasoning_effort: str = field(default_factory=lambda: os.getenv("LILY_AI_REASONING", "low"))
     ai_profiles_json: str = field(default_factory=lambda: os.getenv("LILY_AI_PROFILES_JSON", ""))
     ai_presets: tuple[str, ...] = field(default_factory=lambda: tuple(value.strip().lower() for value in os.getenv("LILY_AI_PRESETS", "").split(",") if value.strip()))
+    enable_all_catalog_models: bool = field(default_factory=lambda: _bool("LILY_ENABLE_ALL_CATALOG_MODELS", False))
+    allow_public_ai_fallbacks: bool = field(default_factory=lambda: _bool("LILY_ALLOW_PUBLIC_AI_FALLBACKS", False))
     model_cooldown_base: float = field(default_factory=lambda: float(os.getenv("LILY_MODEL_COOLDOWN_BASE", "8")))
     model_cooldown_max: float = field(default_factory=lambda: float(os.getenv("LILY_MODEL_COOLDOWN_MAX", "300")))
     stream_public_base_url: str = field(default_factory=lambda: os.getenv("LILY_STREAM_PUBLIC_BASE_URL", "").rstrip("/"))
@@ -95,31 +99,7 @@ class Settings:
             model = models[min(index, len(models) - 1)]
             family = families[min(index, len(families) - 1)] if families else ("anthropic" if model.startswith("claude-") else "google" if model.startswith("gemini-") else "openai")
             profiles.append({"name": f"provider-{index + 1}", "api_key": key, "base_url": bases[min(index, len(bases) - 1)], "model": model, "family": family, "capabilities": ["chat", "structured", "reasoning"] if model.startswith(("gpt-", "claude-", "gemini-")) else ["chat"], "priority": index, "max_retries": 1})
-        preset_specs = {
-            "groq": {"env": "GROQ_API_KEY", "base": "https://api.groq.com/openai/v1", "model_env": "LILY_GROQ_MODEL", "model": "openai/gpt-oss-20b", "caps": ["chat", "structured"], "requires_key": True},
-            "openrouter-free": {"env": "OPENROUTER_API_KEY", "base": "https://openrouter.ai/api/v1", "model_env": "LILY_OPENROUTER_FREE_MODEL", "model": "openrouter/free", "caps": ["chat", "structured"], "requires_key": True},
-            "ollama": {"env": "OLLAMA_API_KEY", "base_env": "OLLAMA_BASE_URL", "base": "http://127.0.0.1:11434/v1", "model_env": "OLLAMA_MODEL", "model": "qwen3:8b", "caps": ["chat", "structured"], "requires_key": False},
-            "ovh-anonymous": {"env": "OVH_AI_API_KEY", "base": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1", "model_env": "LILY_OVH_MODEL", "model": "gpt-oss-20b", "caps": ["chat"], "requires_key": False},
-        }
-        priority = len(profiles)
-        for preset_name in self.ai_presets:
-            spec = preset_specs.get(preset_name)
-            if not spec:
-                continue
-            key = os.getenv(str(spec["env"]), "")
-            if bool(spec["requires_key"]) and not key:
-                continue
-            profiles.append({
-                "name": f"preset-{preset_name}",
-                "api_key": key or "local-or-anonymous",
-                "base_url": os.getenv(str(spec.get("base_env", "")), str(spec["base"])) if spec.get("base_env") else str(spec["base"]),
-                "model": os.getenv(str(spec["model_env"]), str(spec["model"])),
-                "family": "openai",
-                "capabilities": spec["caps"],
-                "priority": priority,
-                "max_retries": 1,
-            })
-            priority += 1
+        profiles.extend(profiles_for_presets(self.ai_presets, self.enable_all_catalog_models, self.allow_public_ai_fallbacks, starting_priority=len(profiles)))
         return profiles
 
     def prepare(self) -> None:
