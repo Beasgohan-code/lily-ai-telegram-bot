@@ -181,6 +181,22 @@ class LilyCoreTests(unittest.TestCase):
         self.assertIn("cloudflare-workers-ai", PRESETS)
         self.assertIn("ollama-local", PRESETS)
 
+    def test_requested_fallback_tier_order_is_enforced(self):
+        from lily.config import Settings
+        configured = replace(
+            Settings(),
+            ai_profiles_json="",
+            ai_keys=("openai-key",),
+            ai_bases=("https://api.openai.com/v1",),
+            openai_api_key="",
+            openai_api_base="",
+            ai_presets=("ollama-local", "gemini", "groq"),
+            fallback_order=("free", "gemini", "openai", "groq"),
+        )
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "gemini-key", "GROQ_API_KEY": "groq-key", "OLLAMA_BASE_URL": "http://127.0.0.1:11434/v1"}, clear=False):
+            names = [str(profile["name"]) for profile in configured.model_profiles()]
+        self.assertEqual(names, ["preset-ollama-local", "preset-gemini", "provider-1", "preset-groq"])
+
 
 if __name__ == "__main__":
     unittest.main()

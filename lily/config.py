@@ -53,6 +53,7 @@ class Settings:
     ai_presets: tuple[str, ...] = field(default_factory=lambda: tuple(value.strip().lower() for value in os.getenv("LILY_AI_PRESETS", "").split(",") if value.strip()))
     enable_all_catalog_models: bool = field(default_factory=lambda: _bool("LILY_ENABLE_ALL_CATALOG_MODELS", False))
     allow_public_ai_fallbacks: bool = field(default_factory=lambda: _bool("LILY_ALLOW_PUBLIC_AI_FALLBACKS", False))
+    fallback_order: tuple[str, ...] = field(default_factory=lambda: tuple(value.strip().lower() for value in os.getenv("LILY_FALLBACK_ORDER", "free,gemini,openai,groq").split(",") if value.strip()))
     model_cooldown_base: float = field(default_factory=lambda: float(os.getenv("LILY_MODEL_COOLDOWN_BASE", "8")))
     model_cooldown_max: float = field(default_factory=lambda: float(os.getenv("LILY_MODEL_COOLDOWN_MAX", "300")))
     stream_public_base_url: str = field(default_factory=lambda: os.getenv("LILY_STREAM_PUBLIC_BASE_URL", "").rstrip("/"))
@@ -100,7 +101,23 @@ class Settings:
             family = families[min(index, len(families) - 1)] if families else ("anthropic" if model.startswith("claude-") else "google" if model.startswith("gemini-") else "openai")
             profiles.append({"name": f"provider-{index + 1}", "api_key": key, "base_url": bases[min(index, len(bases) - 1)], "model": model, "family": family, "capabilities": ["chat", "structured", "reasoning"] if model.startswith(("gpt-", "claude-", "gemini-")) else ["chat"], "priority": index, "max_retries": 1})
         profiles.extend(profiles_for_presets(self.ai_presets, self.enable_all_catalog_models, self.allow_public_ai_fallbacks, starting_priority=len(profiles)))
-        return profiles
+        tier_rank = {tier: index for index, tier in enumerate(self.fallback_order)}
+
+        def tier(profile: dict[str, object]) -> str:
+            name = str(profile.get("name", "")).lower()
+            base = str(profile.get("base_url", "")).lower()
+            if name.startswith("preset-groq"):
+                return "groq"
+            if name.startswith("preset-gemini") or "gemini" in str(profile.get("model", "")).lower():
+                return "gemini"
+            if name.startswith("preset-"):
+                return "free"
+            if "api.openai.com" in base or str(profile.get("family", "")).lower() == "openai":
+                return "openai"
+            return "openai"
+
+        ordered = sorted(enumerate(profiles), key=lambda pair: (tier_rank.get(tier(pair[1]), len(tier_rank)), pair[0]))
+        return [{**profile, "priority": index} for index, (_, profile) in enumerate(ordered)]
 
     def prepare(self) -> None:
         Path(self.database_url).parent.mkdir(parents=True, exist_ok=True)
