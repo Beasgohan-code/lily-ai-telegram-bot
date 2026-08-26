@@ -12,15 +12,15 @@ from .model_router import ModelProfile, ModelRouter
 
 ACTIONS = {
     "none", "help", "usage", "set_settings", "create_skill", "list_skills",
-    "ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "demote_user", "promote_user", "delete_message", "purge_messages", "report_user",
-    "warn_user", "pin_message", "set_group_rules", "welcome_member",
+    "ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "restrict_user", "unrestrict_user", "demote_user", "promote_user", "delete_message", "purge_messages", "report_user",
+    "warn_user", "pin_message", "unpin_message", "set_group_rules", "show_group_rules", "set_welcome", "set_goodbye", "set_verification", "welcome_member",
     "rename_file", "compress_file", "encode_media", "create_file", "summarize_file",
     "download_song", "set_reminder", "summarize_chat", "extract_tasks", "translate",
     "web_research", "generate_image", "generate_video", "create_poll", "remember", "forget_memory",
     "start_channel_post", "publish_channel_post", "delete_last_post",
     "add_filter", "remove_filter", "set_lock", "save_note", "list_notes", "search_posts", "show_warnings",
     "plugin_reply", "model_status", "queue_status", "queue_list", "cancel_queue_job", "web_search", "stream_link", "set_auto_rename", "list_filters", "list_locks",
-    "configure_group_control", "group_controls_status", "trusted_member", "block_domain", "list_domains", "clear_warnings", "set_admin_title", "approve_join_request", "decline_join_request", "list_reports", "resolve_report", "audit_log",
+    "configure_group_control", "group_controls_status", "trusted_member", "block_domain", "list_domains", "clear_warnings", "set_admin_title", "approve_join_request", "decline_join_request", "list_reports", "resolve_report", "audit_log", "add_case_note", "list_case_notes",
 }
 
 RISK = {"safe", "risky", "dangerous"}
@@ -83,7 +83,8 @@ class AIClient:
         return await self.router.status()
 
     async def _request(self, payload: dict[str, Any], requirement: str = "chat") -> dict[str, Any]:
-        data, _profile = await self.router.chat(payload, requirement=requirement)
+        request = {**payload, "_allow_public_fallback": settings.allow_public_ai_fallbacks}
+        data, _profile = await self.router.chat(request, requirement=requirement)
         return data
 
     async def plan(self, text: str, context: dict[str, Any], memories: list[str], chat_settings: dict[str, Any]) -> Plan:
@@ -109,7 +110,7 @@ Never call tools yourself. Output only the JSON schema.
 Available actions: {', '.join(sorted(ACTIONS))}.
 Dangerous actions include banning, kicking, muting, deleting, pinning, changing rules/settings, publishing or deleting channel posts, external downloads, and expensive or large file processing.
 Set requires_confirmation=true for any risky or dangerous action. Require an explicit reply target or numeric user id for moderation. For download_song, require a direct permitted URL and include rights_confirmed=false until the user explicitly confirms they have permission.
-For create_skill, put a structured trigger in args.trigger and a structured action in args.action; ask for missing fields when unclear. For add_filter, use args.trigger and optional args.response/delete_message/warn. For set_lock, use args.content_type and args.enabled. For configure_group_control, use args.control and args.enabled. For trusted_member, set args.user_id and args.trusted. For block_domain, set args.domain and args.blocked. For save_note, use args.name and args.content. For search_posts, use args.channel_id and args.query. For plugin_reply, use args.text.
+For create_skill, put a structured trigger in args.trigger and a structured action in args.action; ask for missing fields when unclear. For add_filter, use args.trigger and optional args.response/delete_message/warn. For set_lock, use args.content_type and args.enabled. For configure_group_control, use args.control and args.enabled. For trusted_member, set args.user_id and args.trusted. For block_domain, set args.domain and args.blocked. For set_welcome/set_goodbye use args.enabled and args.text. For restrict_user use args.user_id, args.mode (read_only or text_only), and bounded args.seconds. For add_case_note use args.note and optional args.report_id/args.user_id. For save_note, use args.name and args.content. For search_posts, use args.channel_id and args.query. For plugin_reply, use args.text.
 Group settings: {json.dumps(chat_settings, ensure_ascii=False)}
 Recent memory: {json.dumps(memories, ensure_ascii=False)}
 """
@@ -173,6 +174,22 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             return Plan(intent="list_filters", summary="List group filters", action="list_filters", risk="safe", confidence=0.9)
         if any(word in low for word in ("list locks", "show locks")):
             return Plan(intent="list_locks", summary="List group locks", action="list_locks", risk="safe", confidence=0.9)
+        if any(word in low for word in ("show rules", "group rules", "what are the rules")) and not any(word in low for word in ("set", "change", "update")):
+            return Plan(intent="show_group_rules", summary="Show the group rules", action="show_group_rules", risk="safe", confidence=0.9)
+        if any(word in low for word in ("set rules", "update rules", "change rules")):
+            rules = re.sub(r"^.*?(?:set|update|change)\s+(?:the\s+)?rules?\s*(?:to|:)?\s*", "", value, flags=re.I).strip()
+            return Plan(intent="set_group_rules", summary="Update the group rules", action="set_group_rules", risk="dangerous", requires_confirmation=True, args={"rules": rules}, missing=[] if rules else ["Provide the rules text"], confidence=0.85)
+        if any(word in low for word in ("welcome message", "set welcome", "change welcome")):
+            enabled = not any(word in low for word in ("disable", "turn off", "stop"))
+            text_value = re.sub(r"^.*?(?:welcome message|set welcome|change welcome)\s*(?:to|:)?\s*", "", value, flags=re.I).strip()
+            return Plan(intent="set_welcome", summary="Configure the welcome flow", action="set_welcome", risk="risky", requires_confirmation=True, args={"enabled": enabled, "text": text_value}, confidence=0.8)
+        if any(word in low for word in ("goodbye message", "set goodbye", "change goodbye")):
+            enabled = not any(word in low for word in ("disable", "turn off", "stop"))
+            text_value = re.sub(r"^.*?(?:goodbye message|set goodbye|change goodbye)\s*(?:to|:)?\s*", "", value, flags=re.I).strip()
+            return Plan(intent="set_goodbye", summary="Configure the goodbye flow", action="set_goodbye", risk="risky", requires_confirmation=True, args={"enabled": enabled, "text": text_value}, confidence=0.8)
+        if any(word in low for word in ("set verification", "enable verification", "disable verification")):
+            enabled = not any(word in low for word in ("disable", "turn off", "stop"))
+            return Plan(intent="set_verification", summary=f"{'Enable' if enabled else 'Disable'} member verification", action="set_verification", risk="dangerous", requires_confirmation=True, args={"enabled": enabled}, confidence=0.85)
         if any(word in low for word in ("group controls", "control status", "show moderation settings", "show group settings")):
             return Plan(intent="group_controls_status", summary="Show group control status", action="group_controls_status", risk="safe", confidence=0.9)
         if any(word in low for word in ("list reports", "show reports", "open reports")):
@@ -182,6 +199,12 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             return Plan(intent="resolve_report", summary=f"Resolve report {report_id or ''}".strip(), action="resolve_report", risk="risky", requires_confirmation=True, args={"report_id": int(report_id) if report_id else 0}, missing=[] if report_id else ["Provide the report number"], confidence=0.85)
         if any(word in low for word in ("audit log", "show audit", "recent actions")):
             return Plan(intent="audit_log", summary="Show recent Lily audit events", action="audit_log", risk="safe", confidence=0.9)
+        if any(word in low for word in ("case note", "moderator note", "staff note")):
+            report_match = re.search(r"(?:report|case)\s*#?(\d+)", low)
+            note = re.sub(r"^.*?(?:case note|moderator note|staff note)\s*(?:for)?\s*(?:report|case)?\s*#?\d*\s*(?:saying|:|that)?\s*", "", value, flags=re.I).strip()
+            if re.search(r"\b(?:show|list|view)\b", low):
+                return Plan(intent="list_case_notes", summary="Show moderator case notes", action="list_case_notes", risk="safe", args={"report_id": int(report_match.group(1)) if report_match else None}, confidence=0.85)
+            return Plan(intent="add_case_note", summary="Add a moderator case note", action="add_case_note", risk="risky", requires_confirmation=True, args={"report_id": int(report_match.group(1)) if report_match else None, "user_id": int(target_id) if target_id else None, "note": note}, missing=[] if note else ["Provide the private note text"], confidence=0.8)
         if any(word in low for word in ("approve join", "approve request", "accept join")):
             if not target_id:
                 return Plan(intent="approve_join_request", summary="Approve a join request", action="approve_join_request", risk="dangerous", missing=["Provide the requester's numeric user ID"], confidence=0.8)
@@ -239,6 +262,15 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             if not target_id:
                 return Plan(intent="demote_user", summary="Demote a user", action="demote_user", risk="dangerous", missing=["Reply to the target user’s message or provide their numeric user ID"], confidence=0.8)
             return Plan(intent="demote_user", summary=f"Demote user {target_id}", action="demote_user", risk="dangerous", requires_confirmation=True, args={"user_id": int(target_id)}, confidence=0.85)
+        if any(word in low for word in ("unrestrict", "restore permissions", "allow this user again")):
+            if not target_id:
+                return Plan(intent="unrestrict_user", summary="Restore a member’s sending permissions", action="unrestrict_user", risk="dangerous", missing=["Reply to the member or provide their numeric user ID"], confidence=0.8)
+            return Plan(intent="unrestrict_user", summary=f"Restore permissions for {target_id}", action="unrestrict_user", risk="dangerous", requires_confirmation=True, args={"user_id": int(target_id)}, confidence=0.85)
+        if any(word in low for word in ("text only", "restrict to text", "read only")):
+            if not target_id:
+                return Plan(intent="restrict_user", summary="Apply a granular member restriction", action="restrict_user", risk="dangerous", missing=["Reply to the member or provide their numeric user ID"], confidence=0.8)
+            mode = "read_only" if "read only" in low else "text_only"
+            return Plan(intent="restrict_user", summary=f"Restrict user {target_id} to {mode.replace('_', ' ')}", action="restrict_user", risk="dangerous", requires_confirmation=True, args={"user_id": int(target_id), "mode": mode, "seconds": 3600}, confidence=0.85)
         if any(word in low for word in ("promote", "make admin", "promote this user")):
             if not target_id:
                 return Plan(intent="promote_user", summary="Promote a user", action="promote_user", risk="dangerous", missing=["Reply to the target user’s message or provide their numeric user ID"], confidence=0.8)
@@ -250,6 +282,16 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
         if "purge" in low or "delete the last" in low and "messages" in low:
             count = next(iter(re.findall(r"\b(\d{1,3})\b", low)), "10")
             return Plan(intent="purge_messages", summary=f"Delete the last {count} messages", action="purge_messages", risk="dangerous", requires_confirmation=True, args={"count": min(100, int(count))}, confidence=0.8)
+        if any(word in low for word in ("unpin", "remove pin")):
+            return Plan(intent="unpin_message", summary="Unpin the selected message", action="unpin_message", risk="dangerous", requires_confirmation=True, args={"message_id": int(reply.get("message_id") or context.get("message_to_act_on") or 0)}, confidence=0.85)
+        if any(word in low for word in ("show warnings", "warning history", "warnings for")):
+            if not target_id:
+                return Plan(intent="show_warnings", summary="Show a member’s warnings", action="show_warnings", risk="safe", missing=["Reply to the member or provide their numeric user ID"], confidence=0.8)
+            return Plan(intent="show_warnings", summary=f"Show warnings for {target_id}", action="show_warnings", risk="safe", args={"user_id": int(target_id)}, confidence=0.85)
+        if "warn" in low:
+            if not target_id:
+                return Plan(intent="warn_user", summary="Warn a member", action="warn_user", risk="risky", missing=["Reply to the member or provide their numeric user ID"], confidence=0.8)
+            return Plan(intent="warn_user", summary=f"Warn user {target_id}", action="warn_user", risk="risky", requires_confirmation=True, args={"user_id": int(target_id), "reason": value}, confidence=0.85)
         if any(word in low for word in ("report this", "report user", "send a report")):
             return Plan(intent="report_user", summary="Report a user to group moderators", action="report_user", risk="risky", requires_confirmation=False, args={"reason": value}, confidence=0.8)
         if any(word in low for word in ("ban", "block permanently")):

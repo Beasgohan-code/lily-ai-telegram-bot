@@ -20,6 +20,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "moderation_enabled": True,
     "welcome_enabled": True,
     "welcome_text": "Welcome {user} to {group}! Please read the rules.",
+    "goodbye_enabled": False,
+    "goodbye_text": "{user} left {group}.",
+    "verification_prompt": "Tap the button below to confirm that you will follow this group’s rules.",
+    "new_member_cooldown_seconds": 600,
     "warning_escalation": 3,
     "auto_rename_enabled": settings.auto_rename_enabled,
     "auto_rename_template": settings.auto_rename_template,
@@ -189,6 +193,23 @@ class Database:
                     created_at INTEGER NOT NULL,
                     resolved_at INTEGER
                 );
+                CREATE TABLE IF NOT EXISTS case_notes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    report_id INTEGER,
+                    target_user_id INTEGER,
+                    author_id INTEGER NOT NULL,
+                    note TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS member_intake (
+                    chat_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    joined_at INTEGER NOT NULL,
+                    verification_status TEXT NOT NULL DEFAULT 'not_required',
+                    verified_at INTEGER,
+                    PRIMARY KEY(chat_id, user_id)
+                );
                 """
             )
             await db.commit()
@@ -286,6 +307,47 @@ class Database:
     async def resolve_report(self, chat_id: int, report_id: int) -> bool:
         async with self.connect() as db:
             cursor = await db.execute("UPDATE moderation_reports SET status='resolved',resolved_at=? WHERE chat_id=? AND id=? AND status='open'", (int(time.time()), chat_id, report_id))
+            await db.commit()
+            return cursor.rowcount == 1
+
+    async def add_case_note(self, chat_id: int, author_id: int, note: str, report_id: int | None = None, target_user_id: int | None = None) -> int:
+        async with self.connect() as db:
+            cursor = await db.execute(
+                "INSERT INTO case_notes(chat_id,report_id,target_user_id,author_id,note,created_at) VALUES(?,?,?,?,?,?)",
+                (chat_id, report_id, target_user_id, author_id, note[:2000], int(time.time())),
+            )
+            await db.commit()
+            return int(cursor.lastrowid)
+
+    async def list_case_notes(self, chat_id: int, report_id: int | None = None, limit: int = 30) -> list[dict[str, Any]]:
+        async with self.connect() as db:
+            if report_id is None:
+                rows = await (await db.execute("SELECT * FROM case_notes WHERE chat_id=? ORDER BY id DESC LIMIT ?", (chat_id, limit))).fetchall()
+            else:
+                rows = await (await db.execute("SELECT * FROM case_notes WHERE chat_id=? AND report_id=? ORDER BY id DESC LIMIT ?", (chat_id, report_id, limit))).fetchall()
+            return [dict(row) for row in rows]
+
+    async def record_member_join(self, chat_id: int, user_id: int, requires_verification: bool) -> None:
+        status = "pending" if requires_verification else "not_required"
+        async with self.connect() as db:
+            await db.execute(
+                "INSERT INTO member_intake(chat_id,user_id,joined_at,verification_status,verified_at) VALUES(?,?,?,?,NULL) "
+                "ON CONFLICT(chat_id,user_id) DO UPDATE SET joined_at=excluded.joined_at,verification_status=excluded.verification_status,verified_at=NULL",
+                (chat_id, user_id, int(time.time()), status),
+            )
+            await db.commit()
+
+    async def member_joined_at(self, chat_id: int, user_id: int) -> int | None:
+        async with self.connect() as db:
+            row = await (await db.execute("SELECT joined_at FROM member_intake WHERE chat_id=? AND user_id=?", (chat_id, user_id))).fetchone()
+            return int(row["joined_at"]) if row else None
+
+    async def complete_verification(self, chat_id: int, user_id: int) -> bool:
+        async with self.connect() as db:
+            cursor = await db.execute(
+                "UPDATE member_intake SET verification_status='verified',verified_at=? WHERE chat_id=? AND user_id=? AND verification_status='pending'",
+                (int(time.time()), chat_id, user_id),
+            )
             await db.commit()
             return cursor.rowcount == 1
 

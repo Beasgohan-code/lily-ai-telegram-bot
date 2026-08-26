@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 import tempfile
 import unittest
+from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
+
+import httpx
 
 from lily.agent import AIClient
 from lily.model_router import ModelProfile, ModelRouter
@@ -166,6 +169,11 @@ class LilyCoreTests(unittest.TestCase):
                 report_id = await database.create_report(1, 7, 88, "Repeated spam")
                 self.assertEqual((await database.list_reports(1))[0]["id"], report_id)
                 self.assertTrue(await database.resolve_report(1, report_id))
+                case_note_id = await database.add_case_note(1, 7, "Escalate only if repeated", report_id, 88)
+                self.assertEqual((await database.list_case_notes(1, report_id))[0]["id"], case_note_id)
+                await database.record_member_join(1, 99, True)
+                self.assertIsNotNone(await database.member_joined_at(1, 99))
+                self.assertTrue(await database.complete_verification(1, 99))
         asyncio.run(run())
 
     def test_heuristic_router_configures_group_control(self):
@@ -173,6 +181,19 @@ class LilyCoreTests(unittest.TestCase):
         self.assertEqual(plan.action, "configure_group_control")
         self.assertEqual(plan.args["control"], "caps")
         self.assertTrue(plan.args["enabled"])
+
+    def test_heuristic_router_understands_expanded_rose_actions(self):
+        client = AIClient()
+        warning = client.heuristic_plan("Lily warn user 123456789 for spam", {"chat_type": "group", "reply": {}})
+        self.assertEqual(warning.action, "warn_user")
+        restricted = client.heuristic_plan("Lily restrict user 123456789 to text only", {"chat_type": "group", "reply": {}})
+        self.assertEqual(restricted.action, "restrict_user")
+        welcome = client.heuristic_plan("Lily set welcome message to Read our rules, {user}", {"chat_type": "group", "reply": {}})
+        self.assertEqual(welcome.action, "set_welcome")
+        goodbye = client.heuristic_plan("Lily set goodbye message to Bye {user}", {"chat_type": "group", "reply": {}})
+        self.assertEqual(goodbye.action, "set_goodbye")
+        case_note = client.heuristic_plan("Lily add a case note for report 7 saying review next incident", {"chat_type": "group", "reply": {}})
+        self.assertEqual(case_note.action, "add_case_note")
 
     def test_complete_free_model_registry_is_present(self):
         self.assertEqual(len(CATALOG), 16)
@@ -196,6 +217,51 @@ class LilyCoreTests(unittest.TestCase):
         with patch.dict("os.environ", {"GEMINI_API_KEY": "gemini-key", "GROQ_API_KEY": "groq-key", "OLLAMA_BASE_URL": "http://127.0.0.1:11434/v1"}, clear=False):
             names = [str(profile["name"]) for profile in configured.model_profiles()]
         self.assertEqual(names, ["preset-ollama-local", "preset-gemini", "provider-1", "preset-groq"])
+
+    def test_high_load_fallback_simulation_rate_limits_errors_and_recovery(self):
+        async def run():
+            requests: Counter[str] = Counter()
+            free_recovered = False
+
+            async def handler(request: httpx.Request) -> httpx.Response:
+                nonlocal free_recovered
+                host = request.url.host or ""
+                requests[host] += 1
+                if host == "free.test":
+                    if free_recovered:
+                        return httpx.Response(200, json={"choices": [{"message": {"content": "free recovered"}}]}, request=request)
+                    return httpx.Response(429, json={"error": "rate limited"}, request=request)
+                if host == "gemini.test":
+                    raise httpx.ReadTimeout("simulated timeout", request=request)
+                if host == "openai.test":
+                    return httpx.Response(200, content=b"{invalid-json", request=request)
+                return httpx.Response(200, json={"choices": [{"message": {"content": "groq fallback"}}]}, request=request)
+
+            profiles = [
+                ModelProfile("free", "https://free.test/v1", "key", "free", priority=0, max_retries=0),
+                ModelProfile("gemini", "https://gemini.test/v1", "key", "gemini", priority=1, max_retries=0),
+                ModelProfile("openai", "https://openai.test/v1", "key", "gpt-test", priority=2, max_retries=0),
+                ModelProfile("groq", "https://groq.test/v1", "key", "groq", priority=3, max_retries=0),
+            ]
+            router = ModelRouter(profiles, cooldown_base=0.02, cooldown_max=0.02, transport=httpx.MockTransport(handler))
+            payload = {"messages": [{"role": "user", "content": "load test"}], "_timeout": 1}
+            results = await asyncio.gather(*(router.chat(payload) for _ in range(32)))
+            self.assertTrue(all(profile.name == "groq" for _, profile in results))
+            self.assertEqual(requests["free.test"], 1)
+            self.assertEqual(requests["gemini.test"], 1)
+            self.assertEqual(requests["openai.test"], 1)
+            self.assertEqual(requests["groq.test"], 32)
+            await asyncio.sleep(0.03)
+            free_recovered = True
+            response, profile = await router.chat(payload)
+            self.assertEqual(profile.name, "free")
+            self.assertEqual(response["choices"][0]["message"]["content"], "free recovered")
+            status = {item["name"]: item for item in await router.status()}
+            self.assertEqual(status["free"]["in_flight"], 0)
+            self.assertGreaterEqual(status["gemini"]["failures"], 1)
+            self.assertGreaterEqual(status["openai"]["failures"], 1)
+
+        asyncio.run(run())
 
 
 if __name__ == "__main__":

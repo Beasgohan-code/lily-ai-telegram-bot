@@ -29,10 +29,10 @@ from .group_controls import GROUP_CONTROL_MAP, control_summary
 tools = LilyTools(db)
 
 ADMIN_ACTIONS = {
-    "ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "demote_user", "promote_user", "delete_message", "purge_messages", "report_user", "pin_message",
+    "ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "restrict_user", "unrestrict_user", "demote_user", "promote_user", "delete_message", "purge_messages", "report_user", "pin_message", "unpin_message",
     "set_settings", "create_skill", "set_group_rules", "start_channel_post", "publish_channel_post", "delete_last_post",
     "warn_user", "add_filter", "remove_filter", "set_lock", "save_note", "list_notes", "search_posts", "show_warnings", "set_auto_rename", "stream_link",
-    "configure_group_control", "group_controls_status", "trusted_member", "block_domain", "list_domains", "clear_warnings", "set_admin_title", "approve_join_request", "decline_join_request", "list_reports", "resolve_report", "audit_log",
+    "configure_group_control", "group_controls_status", "trusted_member", "block_domain", "list_domains", "clear_warnings", "set_admin_title", "approve_join_request", "decline_join_request", "list_reports", "resolve_report", "audit_log", "set_welcome", "set_goodbye", "set_verification", "set_group_rules", "show_group_rules", "add_case_note", "list_case_notes",
 }
 
 
@@ -105,6 +105,10 @@ async def progress_message(update: Update, text_value: str) -> None:
         blocks.append(paragraph([custom_emoji(settings.custom_emoji_id, "✦"), " Agent activity"] ))
     blocks.extend([thinking(), paragraph(text_value)])
     await rich.send(chat.id, blocks, reply_to=update.effective_message.message_id if update.effective_message else None)
+
+
+def normal_chat_permissions() -> ChatPermissions:
+    return ChatPermissions(can_send_messages=True, can_send_audios=True, can_send_documents=True, can_send_photos=True, can_send_videos=True, can_send_video_notes=True, can_send_voice_notes=True, can_send_polls=True, can_send_other_messages=True, can_add_web_page_previews=True)
 
 
 async def send_error(update: Update, message: str) -> None:
@@ -260,9 +264,22 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         await db.audit(chat_id, user_id, "mute_user", plan.args)
         return f"User {plan.args['user_id']} was muted for {seconds // 60} minutes."
     if action == "unmute_user":
-        permissions = ChatPermissions(can_send_messages=True, can_send_audios=True, can_send_documents=True, can_send_photos=True, can_send_videos=True, can_send_video_notes=True, can_send_voice_notes=True, can_send_polls=True, can_send_other_messages=True, can_add_web_page_previews=True)
-        await update.get_bot().restrict_chat_member(chat_id, int(plan.args["user_id"]), permissions=permissions)
+        await update.get_bot().restrict_chat_member(chat_id, int(plan.args["user_id"]), permissions=normal_chat_permissions())
         return f"User {plan.args['user_id']} was unmuted."
+    if action == "restrict_user":
+        target = int(plan.args["user_id"])
+        mode = str(plan.args.get("mode") or "read_only")
+        seconds = max(60, min(int(plan.args.get("seconds", 3600)), 2_419_200))
+        until = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+        permissions = ChatPermissions(can_send_messages=False) if mode == "read_only" else ChatPermissions(can_send_messages=True, can_send_audios=False, can_send_documents=False, can_send_photos=False, can_send_videos=False, can_send_video_notes=False, can_send_voice_notes=False, can_send_polls=False, can_send_other_messages=False, can_add_web_page_previews=False)
+        await update.get_bot().restrict_chat_member(chat_id, target, permissions=permissions, until_date=until)
+        await db.audit(chat_id, user_id, "restrict_user", {"user_id": target, "mode": mode, "seconds": seconds})
+        return f"User {target} was restricted to {mode.replace('_', ' ')} for {seconds // 60} minutes."
+    if action == "unrestrict_user":
+        target = int(plan.args["user_id"])
+        await update.get_bot().restrict_chat_member(chat_id, target, permissions=normal_chat_permissions())
+        await db.audit(chat_id, user_id, "unrestrict_user", {"user_id": target})
+        return f"Restored normal sending permissions for user {target}."
     if action == "delete_message":
         await update.get_bot().delete_message(chat_id, int(plan.args["message_id"]))
         await db.audit(chat_id, user_id, "delete_message", plan.args)
@@ -289,6 +306,11 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
     if action == "pin_message":
         await update.get_bot().pin_chat_message(chat_id, int(plan.args.get("message_id", update.effective_message.message_id)), disable_notification=True)
         return "The message was pinned."
+    if action == "unpin_message":
+        message_id = int(plan.args.get("message_id") or update.effective_message.message_id)
+        await update.get_bot().unpin_chat_message(chat_id, message_id)
+        await db.audit(chat_id, user_id, "unpin_message", {"message_id": message_id})
+        return "The message was unpinned."
     if action == "set_settings":
         allowed = {"personality", "language", "mention_only", "memory_enabled", "auto_confirm_safe", "welcome_enabled", "welcome_text", "daily_request_limit", "monthly_request_limit", "daily_bytes_limit", "monthly_bytes_limit", "warning_escalation"}
         patch = {key: value for key, value in plan.args.items() if key in allowed}
@@ -357,6 +379,19 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
     if action == "resolve_report":
         report_id = int(plan.args.get("report_id") or 0)
         return f"Report #{report_id} was resolved." if report_id and await db.resolve_report(chat_id, report_id) else "That open report was not found."
+    if action == "add_case_note":
+        note = str(plan.args.get("note") or "").strip()
+        if not note:
+            return "Provide the private case note text."
+        report_id = int(plan.args["report_id"]) if plan.args.get("report_id") else None
+        target = int(plan.args["user_id"]) if plan.args.get("user_id") else None
+        note_id = await db.add_case_note(chat_id, user_id, note, report_id, target)
+        await db.audit(chat_id, user_id, "add_case_note", {"note_id": note_id, "report_id": report_id, "target_user_id": target})
+        return f"Saved private moderator note #{note_id}."
+    if action == "list_case_notes":
+        report_id = int(plan.args["report_id"]) if plan.args.get("report_id") else None
+        notes = await db.list_case_notes(chat_id, report_id)
+        return "\n".join(f"• #{item['id']} — {item['note']}" for item in notes)[:3500] or "No moderator case notes are saved."
     if action == "audit_log":
         events = await db.recent_audit(chat_id, limit=30)
         return "\n".join(f"• {item['event']} — {json.dumps(item.get('detail', {}), ensure_ascii=False)[:160]}" for item in events)[:3500] or "No Lily audit events are recorded yet."
@@ -415,6 +450,27 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         rules = str(plan.args.get("rules", plan.args.get("text", "")))
         await db.update_chat_settings(chat_id, {"rules": rules}, update.effective_chat.title or "")
         return "The group rules were saved."
+    if action == "show_group_rules":
+        values = await db.get_chat_settings(chat_id, update.effective_chat.title or "")
+        return str(values.get("rules") or "No group rules have been saved yet.")
+    if action in {"set_welcome", "set_goodbye"}:
+        enabled = bool(plan.args.get("enabled", True))
+        text_key = "welcome_text" if action == "set_welcome" else "goodbye_text"
+        enabled_key = "welcome_enabled" if action == "set_welcome" else "goodbye_enabled"
+        control_key = "welcome" if action == "set_welcome" else "goodbye"
+        text_value = str(plan.args.get("text") or "").strip()
+        patch = {enabled_key: enabled}
+        if text_value:
+            patch[text_key] = text_value[:1000]
+        await db.update_chat_settings(chat_id, patch, update.effective_chat.title or "")
+        await db.set_control(chat_id, control_key, enabled, update.effective_chat.title or "")
+        await db.audit(chat_id, user_id, action, {"enabled": enabled, "custom_text": bool(text_value)})
+        return f"The {control_key} flow is now {'enabled' if enabled else 'disabled'}."
+    if action == "set_verification":
+        enabled = bool(plan.args.get("enabled", True))
+        await db.set_control(chat_id, "verification", enabled, update.effective_chat.title or "")
+        await db.audit(chat_id, user_id, "set_verification", {"enabled": enabled})
+        return f"Member verification is now {'enabled' if enabled else 'disabled'} for new members."
     if action == "warn_user":
         target_id = int(plan.args.get("user_id") or _reply_context(update).get("reply", {}).get("user_id"))
         reason = str(plan.args.get("reason") or "Group rule violation")
@@ -691,6 +747,22 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             item = await encoding_queue.status(job_id, update.effective_user.id)
         await query.edit_message_text(text=f"Encoding job `{job_id}`\nState: **{item['state']}**\n{item.get('progress', '')}\n{item.get('error', '')}", parse_mode="Markdown", reply_markup=inline_keyboard([[('Refresh', f'queue:{job_id}:status'), ('Cancel', f'queue:{job_id}:cancel')]]) if item['state'] in {'queued', 'running'} else None)
         return
+    if query.data.startswith("verify:"):
+        try:
+            target = int(query.data.split(":", 1)[1])
+        except ValueError:
+            return
+        if update.effective_user.id != target:
+            await query.answer("Only the new member can complete this verification.", show_alert=True)
+            return
+        if not await db.complete_verification(update.effective_chat.id, target):
+            await query.answer("This verification is expired or has already been completed.", show_alert=True)
+            return
+        await update.get_bot().restrict_chat_member(update.effective_chat.id, target, permissions=normal_chat_permissions())
+        await db.audit(update.effective_chat.id, target, "member_verified", {"user_id": target})
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text("Verification complete. Your normal group permissions have been restored.")
+        return
     if query.data in {"postpublish", "postcancel"}:
         state = context.user_data.get("post_state")
         if not state or state.get("stage") != "preview":
@@ -754,6 +826,10 @@ async def welcome_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await moderation.welcome(update)
 
 
+async def goodbye_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await moderation.goodbye(update)
+
+
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     if isinstance(update, Update) and update.effective_chat:
         await send_error(update, "An internal error occurred while processing that request. Check the server log for details.")
@@ -762,6 +838,7 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 def register_handlers(application: Application) -> None:
     plugin_manager.discover()
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_handler), group=-1)
+    application.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, goodbye_handler), group=-1)
     application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, on_message), group=0)
-    application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^(confirm:|postpublish$|postcancel$|search:|queue:)"), group=0)
+    application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^(confirm:|postpublish$|postcancel$|search:|queue:|verify:)"), group=0)
     application.add_error_handler(on_error)

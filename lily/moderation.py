@@ -9,16 +9,19 @@ from telegram import ChatPermissions, Update
 
 from .config import settings
 from .db import db
-from .rich import blockquote, heading, paragraph, rich
+from .rich import blockquote, heading, inline_keyboard, paragraph, rich
 
 
 URL_RE = re.compile(r"https?://\S+|t\.me/\S+", re.IGNORECASE)
+INVITE_RE = re.compile(r"(?:t\.me/(?:joinchat/|\+)|telegram\.me/(?:joinchat/|\+))", re.IGNORECASE)
+SUSPICIOUS_RE = re.compile(r"(?:guaranteed profit|free crypto|double your money|dm me for|wallet connect|seed phrase)", re.IGNORECASE)
 
 
 class ModerationService:
     def __init__(self) -> None:
         self.recent_messages: dict[tuple[int, int], deque[float]] = defaultdict(lambda: deque(maxlen=20))
         self.recent_texts: dict[tuple[int, int], deque[tuple[float, str]]] = defaultdict(lambda: deque(maxlen=12))
+        self.recent_media: dict[tuple[int, int], deque[float]] = defaultdict(lambda: deque(maxlen=12))
 
     async def is_admin(self, bot, chat_id: int, user_id: int) -> bool:
         if user_id in settings.admin_user_ids:
@@ -88,6 +91,15 @@ class ModerationService:
         kind = self.content_type(message)
         text = (message.text or message.caption or "").strip()
         forwarded = bool(getattr(message, "forward_origin", None) or getattr(message, "forward_from", None))
+        joined_at = await db.member_joined_at(chat.id, user.id)
+        cooldown = int(chat_settings.get("new_member_cooldown_seconds", 600))
+        within_new_member_window = joined_at is not None and time.time() - joined_at < cooldown
+        if within_new_member_window and controls.get("new_member_cooldown", False) and (kind or URL_RE.search(text)):
+            await self._delete(update, "new_member_cooldown_deleted", {"content_type": kind or "link", "cooldown_seconds": cooldown})
+            return False
+        if within_new_member_window and controls.get("new_member_limits", False) and (forwarded or URL_RE.search(text)):
+            await self._delete(update, "new_member_limit_deleted", {"forwarded": forwarded, "has_link": bool(URL_RE.search(text))})
+            return False
         blocked = (
             bool(kind and (locks.get(kind, False) or controls.get(kind, False)))
             or ((locks.get("links", False) or controls.get("links", False)) and bool(URL_RE.search(text)))
@@ -111,6 +123,20 @@ class ModerationService:
 
         if controls.get("mention_spam", False) and text.count("@") >= 6:
             await self._delete(update, "mention_spam_deleted", {"mentions": text.count("@")})
+            return False
+
+        if controls.get("invite_links", False) and INVITE_RE.search(text):
+            await self._delete(update, "invite_link_deleted", {})
+            return False
+
+        emoji_count = sum(1 for character in text if ord(character) >= 0x1F000)
+        if controls.get("emoji_spam", False) and emoji_count >= 12:
+            await self._delete(update, "emoji_spam_deleted", {"emoji_count": emoji_count})
+            return False
+
+        if controls.get("suspicious_text", False) and SUSPICIOUS_RE.search(text):
+            report_id = await db.create_report(chat.id, 0, user.id, "Automatic suspicious-text flag")
+            await db.audit(chat.id, user.id, "suspicious_text_flagged", {"report_id": report_id})
             return False
 
         if controls.get("duplicate_text", False) and text:
@@ -152,6 +178,14 @@ class ModerationService:
             except Exception:
                 pass
             return False
+        if kind:
+            media_bucket = self.recent_media[(chat.id, user.id)]
+            media_bucket.append(now)
+            while media_bucket and now - media_bucket[0] > 30:
+                media_bucket.popleft()
+            if controls.get("media_spam", False) and len(media_bucket) >= 6:
+                await self._delete(update, "media_spam_deleted", {"media_in_30_seconds": len(media_bucket)})
+                return False
         return True
 
     async def welcome(self, update: Update) -> None:
@@ -163,9 +197,34 @@ class ModerationService:
             return
         for member in message.new_chat_members[:10]:
             name = member.full_name.replace("<", "&lt;").replace(">", "&gt;")
+            requires_verification = bool(settings_for_chat.get("controls", {}).get("verification", False))
+            await db.record_member_join(update.effective_chat.id, member.id, requires_verification)
             template = settings_for_chat.get("welcome_text") or "Welcome {user} to {group}! Please read the rules."
             text = template.replace("{user}", name).replace("{group}", update.effective_chat.title or "this group")
-            await rich.send(update.effective_chat.id, [heading("Welcome", 2), paragraph(text), blockquote(settings_for_chat.get("rules") or "Be respectful and avoid spam.", "Group rules")])
+            markup = None
+            if requires_verification:
+                try:
+                    await update.get_bot().restrict_chat_member(update.effective_chat.id, member.id, permissions=ChatPermissions(can_send_messages=False))
+                except Exception:
+                    pass
+                markup = inline_keyboard([[('Verify membership', f'verify:{member.id}')]])
+            blocks = [heading("Welcome", 2), paragraph(text), blockquote(settings_for_chat.get("rules") or "Be respectful and avoid spam.", "Group rules")]
+            if requires_verification:
+                blocks.append(paragraph(str(settings_for_chat.get("verification_prompt") or "Tap the button below to confirm that you will follow this group’s rules.")))
+            await rich.send(update.effective_chat.id, blocks, reply_markup=markup)
+
+    async def goodbye(self, update: Update) -> None:
+        message = update.effective_message
+        if not message or not message.left_chat_member or not update.effective_chat:
+            return
+        settings_for_chat = await db.get_chat_settings(update.effective_chat.id, update.effective_chat.title or "")
+        if not settings_for_chat.get("goodbye_enabled", False) or not settings_for_chat.get("controls", {}).get("goodbye", False):
+            return
+        member = message.left_chat_member
+        name = member.full_name.replace("<", "&lt;").replace(">", "&gt;")
+        template = settings_for_chat.get("goodbye_text") or "{user} left {group}."
+        text = template.replace("{user}", name).replace("{group}", update.effective_chat.title or "this group")
+        await rich.send(update.effective_chat.id, [heading("Goodbye", 3), paragraph(text)])
 
 
 moderation = ModerationService()
