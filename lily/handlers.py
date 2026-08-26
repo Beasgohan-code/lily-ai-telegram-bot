@@ -16,6 +16,7 @@ from .rich import blockquote, bold, code, confirmation_keyboard, details, divide
 from .tools import LilyTools, ToolContext
 from .postbot import post_service
 from .moderation import moderation
+from .plugin_manager import plugin_manager
 
 
 tools = LilyTools(db)
@@ -247,6 +248,13 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
             return "Tell me which setting you want to change."
         await db.update_chat_settings(chat_id, patch, update.effective_chat.title or "")
         return "The group settings were updated."
+    if action == "plugin_reply":
+        return str(plan.args.get("text") or plan.summary)[:3500]
+    if action == "model_status":
+        statuses = await ai.status()
+        if not statuses:
+            return "No AI model profiles are configured."
+        return "\n".join(f"• {item['name']} / {item['model']} — {'available' if item['available'] else 'cooling down'}; successes={item['successes']}; failures={item['failures']}" for item in statuses)
     if action == "set_group_rules":
         rules = str(plan.args.get("rules", plan.args.get("text", "")))
         await db.update_chat_settings(chat_id, {"rules": rules}, update.effective_chat.title or "")
@@ -415,13 +423,17 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     settings_for_chat = await db.get_chat_settings(update.effective_chat.id, update.effective_chat.title or "")
     skill_plan = await skill_trigger(update)
+    plugin_plan = await plugin_manager.plan(text_value, update.effective_chat.id, update.effective_user.id, message.message_id)
     bot_username = context.application.bot.username
     addressed = addressed_to_lily(update, bot_username)
-    if not addressed and settings_for_chat.get("mention_only", True) and skill_plan is None:
+    if not addressed and settings_for_chat.get("mention_only", True) and skill_plan is None and plugin_plan is None:
         return
     ok, reason = await db.charge_request(update.effective_user.id, update.effective_chat.id)
     if not ok:
         await send_error(update, f"Your Lily quota is unavailable because the {reason}. Try again after the quota resets or ask the administrator to change the group limits.")
+        return
+    if plugin_plan:
+        await handle_plan(update, context, plugin_plan, settings_for_chat)
         return
     if skill_plan:
         await handle_plan(update, context, skill_plan, settings_for_chat)
@@ -501,7 +513,8 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def register_handlers(application: Application) -> None:
+    plugin_manager.discover()
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_handler), group=-1)
     application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, on_message), group=0)
-    application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^confirm:"), group=0)
+    application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^(confirm:|postpublish$|postcancel$)"), group=0)
     application.add_error_handler(on_error)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -46,6 +47,9 @@ class Settings:
     ))
     ai_model: str = field(default_factory=lambda: os.getenv("LILY_AI_MODEL", "gpt-5-mini"))
     ai_reasoning_effort: str = field(default_factory=lambda: os.getenv("LILY_AI_REASONING", "low"))
+    ai_profiles_json: str = field(default_factory=lambda: os.getenv("LILY_AI_PROFILES_JSON", ""))
+    model_cooldown_base: float = field(default_factory=lambda: float(os.getenv("LILY_MODEL_COOLDOWN_BASE", "8")))
+    model_cooldown_max: float = field(default_factory=lambda: float(os.getenv("LILY_MODEL_COOLDOWN_MAX", "300")))
     permitted_download_domains: tuple[str, ...] = field(default_factory=lambda: tuple(
         d.strip().lower() for d in os.getenv("LILY_ALLOWED_DOWNLOAD_DOMAINS", "").split(",") if d.strip()
     ))
@@ -53,6 +57,27 @@ class Settings:
     admin_user_ids: tuple[int, ...] = field(default_factory=lambda: tuple(
         int(v.strip()) for v in os.getenv("LILY_ADMIN_USER_IDS", "").split(",") if v.strip().lstrip("-").isdigit()
     ))
+
+    def model_profiles(self) -> list[dict[str, object]]:
+        if self.ai_profiles_json:
+            try:
+                raw = json.loads(self.ai_profiles_json)
+                if isinstance(raw, list):
+                    return [item for item in raw if isinstance(item, dict) and item.get("api_key") and item.get("base_url") and item.get("model")]
+            except json.JSONDecodeError:
+                pass
+        keys = self.ai_keys or ((self.openai_api_key,) if self.openai_api_key else ())
+        bases = self.ai_bases or ((self.openai_api_base,) if self.openai_api_base else ())
+        models = tuple(value.strip() for value in os.getenv("LILY_AI_MODELS", self.ai_model).split(",") if value.strip())
+        families = tuple(value.strip() for value in os.getenv("LILY_AI_FAMILIES", "").split(",") if value.strip())
+        profiles = []
+        for index, key in enumerate(keys):
+            if not bases:
+                continue
+            model = models[min(index, len(models) - 1)]
+            family = families[min(index, len(families) - 1)] if families else ("anthropic" if model.startswith("claude-") else "google" if model.startswith("gemini-") else "openai")
+            profiles.append({"name": f"provider-{index + 1}", "api_key": key, "base_url": bases[min(index, len(bases) - 1)], "model": model, "family": family, "capabilities": ["chat", "structured", "reasoning"] if model.startswith(("gpt-", "claude-", "gemini-")) else ["chat"], "priority": index, "max_retries": 1})
+        return profiles
 
     def prepare(self) -> None:
         Path(self.database_url).parent.mkdir(parents=True, exist_ok=True)

@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 
 from lily.agent import AIClient
+from lily.model_router import ModelProfile, ModelRouter
+from lily.plugin_manager import plugin_manager
 from lily.db import Database
 from lily.postbot import ChannelPostService
 from lily.rich import confirmation_keyboard
@@ -61,6 +63,20 @@ class LilyCoreTests(unittest.TestCase):
                 self.assertEqual((await database.get_notes(1, "rules"))[0]["content"], "Be kind")
                 await database.index_post("-1001", 42, "Dragon Ball", "Episode announcement", "https://t.me/c/1/42")
                 self.assertEqual((await database.search_posts("-1001", "dragon"))[0]["message_id"], 42)
+        asyncio.run(run())
+
+    def test_model_family_payload_shapes_tokens_and_reasoning(self):
+        router = ModelRouter([ModelProfile("claude", "https://example.test", "key", "claude-sonnet-4-6", "anthropic", frozenset({"chat", "structured", "reasoning"}))])
+        payload = router._family_payload(ModelProfile("claude", "https://example.test", "key", "claude-sonnet-4-6", "anthropic", frozenset({"chat", "structured", "reasoning"})), {"max_completion_tokens": 500, "_reasoning": True, "_thinking_budget": 2048})
+        self.assertGreater(payload["max_tokens"], payload["thinking"]["budget_tokens"])
+        self.assertNotIn("max_completion_tokens", payload)
+        self.assertEqual(payload["thinking"]["budget_tokens"], 2048)
+
+    def test_custom_plugin_builds_safe_plan(self):
+        async def run():
+            plan = await plugin_manager.plan("hello lily please", 1, 2, 3)
+            self.assertIsNotNone(plan)
+            self.assertEqual(plan.action, "plugin_reply")
         asyncio.run(run())
 
     def test_daily_quota_persists(self):

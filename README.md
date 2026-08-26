@@ -50,6 +50,12 @@ Lily uses an OpenAI-compatible chat-completions endpoint. Set `OPENAI_API_KEY`, 
 
 For fallback support, set `LILY_AI_KEYS` to a comma-separated list of keys. Set `LILY_AI_BASES` to the matching comma-separated list of API bases, or provide one base that will be reused for all keys. Lily moves to the next provider after authentication, rate-limit, timeout, conflict, or server errors.
 
+For advanced multi-model routing, set `LILY_AI_PROFILES_JSON`. Each profile may define `name`, `api_key`, `base_url`, `model`, `family`, `capabilities`, `priority`, and `max_retries`. Lily selects only profiles supporting the requested capability, converts reasoning and token parameters for GPT, Claude, and Gemini families, records success/failure latency, and temporarily cools down unhealthy profiles. `model_status` can report current health in chat.
+
+## Custom skill plugins
+
+Trusted local plugins live in the `plugins/` directory. Each plugin defines a `PLUGIN` manifest with a name, version, description, trigger list, an allow-listed Lily action, risk level, and optional `build_plan(context)` function. A plugin receives text and IDs, not a Telegram Bot object, so all Telegram operations still pass through Lily’s permission and confirmation layer. The included `plugins/hello_skill.py` is a safe example. Do not load untrusted plugin files; Python plugins can execute arbitrary code by design.
+
 ## Channel Post Studio
 
 An admin can say `Lily, create an anime episode announcement`. Lily asks what kind of post to create, asks for the destination channel ID or username, verifies that the requester is authorized and that Lily is an administrator with posting permission, looks up public anime metadata from AniList, renders the announcement with rich text and an expandable synopsis, shows a preview, and asks for final publication confirmation. The template includes primary-style RichMessage buttons. Lily stores the last published message ID per channel so an admin can later say `Lily, delete the last post in this channel`; deletion is also confirmed before execution.

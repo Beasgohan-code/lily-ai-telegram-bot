@@ -5,9 +5,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-import httpx
-
 from .config import settings
+from .model_router import ModelProfile, ModelRouter
 
 
 ACTIONS = {
@@ -15,10 +14,11 @@ ACTIONS = {
     "ban_user", "kick_user", "mute_user", "unmute_user", "delete_message",
     "warn_user", "pin_message", "set_group_rules", "welcome_member",
     "rename_file", "compress_file", "encode_media", "create_file", "summarize_file",
-    "download_song", "set_reminder",     "summarize_chat", "extract_tasks", "translate", "web_research", "generate_image", "create_poll", "remember", "forget_memory",
+    "download_song", "set_reminder", "summarize_chat", "extract_tasks", "translate",
+    "web_research", "generate_image", "create_poll", "remember", "forget_memory",
     "start_channel_post", "publish_channel_post", "delete_last_post",
     "add_filter", "remove_filter", "set_lock", "save_note", "list_notes", "search_posts", "show_warnings",
-
+    "plugin_reply", "model_status",
 }
 
 RISK = {"safe", "risky", "dangerous"}
@@ -51,38 +51,37 @@ class Plan:
             requires_confirmation=bool(value.get("requires_confirmation", False)),
             args=value.get("args") if isinstance(value.get("args"), dict) else {},
             missing=[str(x) for x in value.get("missing", []) if isinstance(x, str)][:8],
-            confidence=float(value.get("confidence", 0.0) or 0.0),
+            confidence=max(0.0, min(1.0, float(value.get("confidence", 0.0) or 0.0))),
         )
 
 
 class AIClient:
     def __init__(self) -> None:
-        keys = settings.ai_keys or ((settings.openai_api_key,) if settings.openai_api_key else ())
-        bases = settings.ai_bases or ((settings.openai_api_base,) if settings.openai_api_base else ())
-        self.providers = [(key, bases[min(index, len(bases) - 1)].rstrip("/")) for index, key in enumerate(keys) if bases and key]
-        self.provider_index = 0
-        self.model = settings.ai_model
+        profiles: list[ModelProfile] = []
+        for index, item in enumerate(settings.model_profiles()):
+            capabilities = item.get("capabilities", ["chat"]) if isinstance(item, dict) else ["chat"]
+            profiles.append(ModelProfile(
+                name=str(item.get("name", f"provider-{index + 1}")),
+                base_url=str(item["base_url"]),
+                api_key=str(item["api_key"]),
+                model=str(item["model"]),
+                family=str(item.get("family", "openai")),
+                capabilities=frozenset(str(value) for value in capabilities),
+                priority=int(item.get("priority", index)),
+                max_retries=max(0, int(item.get("max_retries", 1))),
+            ))
+        self.router = ModelRouter(profiles, settings.model_cooldown_base, settings.model_cooldown_max)
 
-    async def _request(self, payload: dict[str, Any]) -> dict[str, Any]:
-        if not self.providers:
-            raise RuntimeError("No AI provider is configured")
-        last_error: Exception | None = None
-        for offset in range(len(self.providers)):
-            index = (self.provider_index + offset) % len(self.providers)
-            key, base = self.providers[index]
-            try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(45.0, connect=10.0)) as client:
-                    response = await client.post(f"{base}/chat/completions", headers={"Authorization": f"Bearer {key}"}, json=payload)
-                    if response.status_code in {401, 403, 408, 409, 429} or response.status_code >= 500:
-                        raise RuntimeError(f"provider {index} returned HTTP {response.status_code}")
-                    response.raise_for_status()
-                    data = response.json()
-                self.provider_index = index
-                return data
-            except Exception as exc:
-                last_error = exc
-                continue
-        raise RuntimeError(f"All AI providers failed: {last_error}")
+    @property
+    def providers(self) -> list[ModelProfile]:
+        return self.router.profiles
+
+    async def status(self) -> list[dict[str, Any]]:
+        return await self.router.status()
+
+    async def _request(self, payload: dict[str, Any], requirement: str = "chat") -> dict[str, Any]:
+        data, _profile = await self.router.chat(payload, requirement=requirement)
+        return data
 
     async def plan(self, text: str, context: dict[str, Any], memories: list[str], chat_settings: dict[str, Any]) -> Plan:
         if not self.providers:
@@ -107,23 +106,22 @@ Never call tools yourself. Output only the JSON schema.
 Available actions: {', '.join(sorted(ACTIONS))}.
 Dangerous actions include banning, kicking, muting, deleting, pinning, changing rules/settings, publishing or deleting channel posts, external downloads, and expensive or large file processing.
 Set requires_confirmation=true for any risky or dangerous action. Require an explicit reply target or numeric user id for moderation. For download_song, require a direct permitted URL and include rights_confirmed=false until the user explicitly confirms they have permission.
-For create_skill, put a short trigger description in args.trigger and a safe action description in args.action; ask for missing fields when unclear. For add_filter, use args.trigger and optional args.response/delete_message/warn. For set_lock, use args.content_type and args.enabled. For save_note, use args.name and args.content. For search_posts, use args.channel_id and args.query.
+For create_skill, put a structured trigger in args.trigger and a structured action in args.action; ask for missing fields when unclear. For add_filter, use args.trigger and optional args.response/delete_message/warn. For set_lock, use args.content_type and args.enabled. For save_note, use args.name and args.content. For search_posts, use args.channel_id and args.query. For plugin_reply, use args.text.
 Group settings: {json.dumps(chat_settings, ensure_ascii=False)}
 Recent memory: {json.dumps(memories, ensure_ascii=False)}
 """
         payload = {
-            "model": self.model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": json.dumps({"request": text, "context": context}, ensure_ascii=False)},
             ],
             "response_format": {"type": "json_schema", "json_schema": {"name": "lily_action_plan", "strict": True, "schema": schema}},
             "max_completion_tokens": 1200,
+            "_reasoning": True,
+            "_reasoning_effort": settings.ai_reasoning_effort,
         }
-        if self.model.startswith("gpt-5"):
-            payload["reasoning"] = {"effort": settings.ai_reasoning_effort}
         try:
-            data = await self._request(payload)
+            data = await self._request(payload, requirement="structured")
             content = data["choices"][0]["message"]["content"]
             return Plan.from_dict(json.loads(content))
         except Exception:
@@ -138,14 +136,13 @@ Do not claim to have performed an action unless the backend confirms it. Do not 
 Recent memory: {json.dumps(memories, ensure_ascii=False)}
 """
         payload = {
-            "model": self.model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": json.dumps({"request": text, "context": context}, ensure_ascii=False)}],
             "max_completion_tokens": 1200,
+            "_reasoning": True,
+            "_reasoning_effort": settings.ai_reasoning_effort,
         }
-        if self.model.startswith("gpt-5"):
-            payload["reasoning"] = {"effort": settings.ai_reasoning_effort}
         try:
-            data = await self._request(payload)
+            data = await self._request(payload, requirement="chat")
             return str(data["choices"][0]["message"].get("content") or "I could not generate a response.")[:3900]
         except Exception:
             return "I could not reach the AI provider right now. Please try again in a moment."
@@ -157,14 +154,16 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
         target_id = context.get("target_user_id") or reply.get("user_id")
         if any(word in low for word in ("usage", "limits", "quota")):
             return Plan(intent="usage", summary="Show my current Lily usage", action="usage", confidence=0.95)
+        if any(word in low for word in ("model status", "ai status", "which model")):
+            return Plan(intent="model_status", summary="Show AI model health", action="model_status", confidence=0.95)
         if "create skill" in low or "add a skill" in low or "new skill" in low:
             return Plan(intent="create_skill", summary="Create a custom trigger skill", action="create_skill", risk="risky", requires_confirmation=True, args={"description": value}, confidence=0.8)
         if "list skills" in low or "what skills" in low:
             return Plan(intent="list_skills", summary="List enabled skills", action="list_skills", confidence=0.9)
         if any(word in low for word in ("ban", "block permanently")):
             if not target_id:
-                return Plan(intent="ban_user", summary="Ban a user", action="ban_user", risk="dangerous", requires_confirmation=False, missing=["Reply to the user’s message or provide a numeric Telegram user ID"], confidence=0.8)
-            return Plan(intent="ban_user", summary=f"Ban user {target_id}", action="ban_user", risk="dangerous", requires_confirmation=True, args={"user_id": int(target_id), "reason": value, "rights_confirmed": True}, confidence=0.8)
+                return Plan(intent="ban_user", summary="Ban a user", action="ban_user", risk="dangerous", missing=["Reply to the user’s message or provide a numeric Telegram user ID"], confidence=0.8)
+            return Plan(intent="ban_user", summary=f"Ban user {target_id}", action="ban_user", risk="dangerous", requires_confirmation=True, args={"user_id": int(target_id), "reason": value}, confidence=0.8)
         if "kick" in low or "remove this user" in low:
             if not target_id:
                 return Plan(intent="kick_user", summary="Remove a user", action="kick_user", risk="dangerous", missing=["Reply to the target user’s message or provide their numeric user ID"], confidence=0.8)
@@ -192,7 +191,7 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             url = next(iter(re.findall(r"https?://\S+", value)), "")
             return Plan(intent="download_song", summary="Download permitted audio", action="download_song", risk="dangerous", requires_confirmation=True, args={"url": url, "rights_confirmed": False}, missing=[] if url else ["Provide a direct URL to audio you are authorized to download"], confidence=0.75)
         if any(word in low for word in ("post to my channel", "make a channel post", "create a post", "anime announcement", "episode announcement")):
-            return Plan(intent="channel_post", summary="Create an anime-style channel announcement", action="start_channel_post", risk="dangerous", requires_confirmation=True, args={"post_type": "anime_announcement", "request": value}, confidence=0.85)
+            return Plan(intent="channel_post", summary="Create an anime-style channel announcement", action="start_channel_post", risk="dangerous", args={"post_type": "anime_announcement", "request": value}, confidence=0.85)
         if any(word in low for word in ("delete last post", "remove last post", "delete the previous post")):
             return Plan(intent="delete_last_post", summary="Delete Lily’s last tracked channel post", action="delete_last_post", risk="dangerous", requires_confirmation=True, args={}, confidence=0.85)
         if any(word in low for word in ("lock links", "lock photos", "lock videos", "lock documents", "unlock links", "unlock photos", "unlock videos", "unlock documents")):
