@@ -32,7 +32,7 @@ ADMIN_ACTIONS = {
     "ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "restrict_user", "unrestrict_user", "demote_user", "promote_user", "delete_message", "purge_messages", "report_user", "pin_message", "unpin_message",
     "set_settings", "create_skill", "set_group_rules", "start_channel_post", "publish_channel_post", "delete_last_post",
     "warn_user", "add_filter", "remove_filter", "set_lock", "save_note", "list_notes", "search_posts", "show_warnings", "set_auto_rename", "stream_link",
-    "configure_group_control", "group_controls_status", "trusted_member", "block_domain", "list_domains", "clear_warnings", "set_admin_title", "approve_join_request", "decline_join_request", "list_reports", "resolve_report", "audit_log", "set_welcome", "set_goodbye", "set_verification", "set_group_rules", "show_group_rules", "add_case_note", "list_case_notes",
+    "configure_group_control", "group_controls_status", "group_diagnostics", "configure_warning_escalation", "trusted_member", "block_domain", "list_domains", "clear_warnings", "set_admin_title", "approve_join_request", "decline_join_request", "list_reports", "resolve_report", "audit_log", "set_welcome", "set_goodbye", "set_verification", "set_group_rules", "show_group_rules", "add_case_note", "list_case_notes", "create_poll",
 }
 
 
@@ -337,6 +337,31 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
             rows.extend([[item.label, "Enabled" if controls.get(item.key, item.default_enabled) else "Disabled", item.risk.title()] for item in items])
         await rich.send(chat_id, [heading("Lily group controls", 1), paragraph(f"{len(GROUP_CONTROL_MAP)} controls are available. Tell Lily to enable or disable any one in normal chat."), table(rows), details("Control examples", [paragraph("“Enable caps control”, “Disable link lock”, “Trust this member”, “Block domain example.com”, or “Show open reports”.")])], reply_to=update.effective_message.message_id)
         return "Displayed the group-control matrix."
+    if action == "group_diagnostics":
+        values = await db.get_chat_settings(chat_id, update.effective_chat.title or "")
+        controls = values.get("controls", {}) if isinstance(values.get("controls"), dict) else {}
+        enabled_controls = sum(1 for enabled in controls.values() if enabled)
+        pending_verification = await db.list_pending_verifications(chat_id)
+        reports = await db.list_reports(chat_id)
+        events = await db.recent_audit(chat_id, limit=5)
+        model_states = await ai.status()
+        available_models = sum(1 for item in model_states if item.get("available"))
+        return "\n".join([
+            "Lily group diagnostics",
+            f"• Controls enabled: {enabled_controls}/{len(GROUP_CONTROL_MAP)}",
+            f"• Open reports: {len(reports)}",
+            f"• Pending member verification: {len(pending_verification)}",
+            f"• AI providers available: {available_models}/{len(model_states)}",
+            f"• Warning escalation: {values.get('warning_escalation', 3)} warnings → {values.get('warning_escalation_seconds', 3600) // 60} minute restriction",
+            f"• Recent audit events: {', '.join(str(item['event']) for item in events) or 'none'}",
+        ])
+    if action == "configure_warning_escalation":
+        threshold = max(0, min(int(plan.args.get("threshold", 3)), 10))
+        seconds = max(60, min(int(plan.args.get("seconds", 3600)), 2_419_200))
+        await db.update_chat_settings(chat_id, {"warning_escalation": threshold, "warning_escalation_seconds": seconds}, update.effective_chat.title or "")
+        await db.set_control(chat_id, "warning_escalation", threshold > 0, update.effective_chat.title or "")
+        await db.audit(chat_id, user_id, "configure_warning_escalation", {"threshold": threshold, "seconds": seconds})
+        return "Warning escalation is disabled." if threshold == 0 else f"After {threshold} warnings, Lily will apply a {seconds // 60}-minute restriction unless the member is trusted."
     if action == "trusted_member":
         target = int(plan.args.get("user_id") or _reply_context(update).get("reply", {}).get("user_id"))
         trusted = bool(plan.args.get("trusted", True))
@@ -476,7 +501,27 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         reason = str(plan.args.get("reason") or "Group rule violation")
         count = await db.add_warning(chat_id, target_id, reason)
         await db.audit(chat_id, user_id, "warn_user", {"user_id": target_id, "reason": reason, "count": count})
+        values = await db.get_chat_settings(chat_id, update.effective_chat.title or "")
+        controls = values.get("controls", {}) if isinstance(values.get("controls"), dict) else {}
+        threshold = int(values.get("warning_escalation", 0))
+        if controls.get("warning_escalation", False) and threshold > 0 and count >= threshold and not await db.is_trusted_member(chat_id, target_id):
+            seconds = max(60, min(int(values.get("warning_escalation_seconds", 3600)), 2_419_200))
+            until = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+            try:
+                await update.get_bot().restrict_chat_member(chat_id, target_id, permissions=ChatPermissions(can_send_messages=False), until_date=until)
+                await db.audit(chat_id, user_id, "warning_escalation_restricted", {"user_id": target_id, "warning_count": count, "seconds": seconds})
+                return f"User {target_id} was warned. Their warning count is {count}, so Lily applied a {seconds // 60}-minute restriction."
+            except Exception as exc:
+                await db.audit(chat_id, user_id, "warning_escalation_failed", {"user_id": target_id, "warning_count": count, "error": str(exc)[:200]})
         return f"User {target_id} was warned. Their warning count is now {count}."
+    if action == "create_poll":
+        question = str(plan.args.get("question") or "").strip()[:300]
+        options = [str(item).strip()[:100] for item in plan.args.get("options", []) if str(item).strip()][:10]
+        if not question or len(options) < 2:
+            return "A poll needs a question and at least two options."
+        await update.get_bot().send_poll(chat_id, question, options, is_anonymous=bool(plan.args.get("anonymous", True)))
+        await db.audit(chat_id, user_id, "create_poll", {"question": question, "option_count": len(options)})
+        return "The poll was posted."
     if action == "add_filter":
         trigger = str(plan.args.get("trigger") or plan.args.get("word") or "").strip()
         if not trigger:

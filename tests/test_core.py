@@ -173,7 +173,9 @@ class LilyCoreTests(unittest.TestCase):
                 self.assertEqual((await database.list_case_notes(1, report_id))[0]["id"], case_note_id)
                 await database.record_member_join(1, 99, True)
                 self.assertIsNotNone(await database.member_joined_at(1, 99))
+                self.assertEqual((await database.list_pending_verifications(1))[0]["user_id"], 99)
                 self.assertTrue(await database.complete_verification(1, 99))
+                self.assertEqual(await database.list_pending_verifications(1), [])
         asyncio.run(run())
 
     def test_heuristic_router_configures_group_control(self):
@@ -194,6 +196,18 @@ class LilyCoreTests(unittest.TestCase):
         self.assertEqual(goodbye.action, "set_goodbye")
         case_note = client.heuristic_plan("Lily add a case note for report 7 saying review next incident", {"chat_type": "group", "reply": {}})
         self.assertEqual(case_note.action, "add_case_note")
+
+    def test_heuristic_router_understands_production_upgrade_actions(self):
+        client = AIClient()
+        poll = client.heuristic_plan("Lily create poll: Ship the update? | Yes | No", {"chat_type": "group", "reply": {}})
+        self.assertEqual(poll.action, "create_poll")
+        self.assertEqual(poll.args["options"], ["Yes", "No"])
+        escalation = client.heuristic_plan("Lily set warning escalation to 4 for 2 hours", {"chat_type": "group", "reply": {}})
+        self.assertEqual(escalation.action, "configure_warning_escalation")
+        self.assertEqual(escalation.args["threshold"], 4)
+        self.assertEqual(escalation.args["seconds"], 7200)
+        diagnostics = client.heuristic_plan("Lily show group diagnostics", {"chat_type": "group", "reply": {}})
+        self.assertEqual(diagnostics.action, "group_diagnostics")
 
     def test_complete_free_model_registry_is_present(self):
         self.assertEqual(len(CATALOG), 16)

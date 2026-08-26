@@ -20,7 +20,7 @@ ACTIONS = {
     "start_channel_post", "publish_channel_post", "delete_last_post",
     "add_filter", "remove_filter", "set_lock", "save_note", "list_notes", "search_posts", "show_warnings",
     "plugin_reply", "model_status", "queue_status", "queue_list", "cancel_queue_job", "web_search", "stream_link", "set_auto_rename", "list_filters", "list_locks",
-    "configure_group_control", "group_controls_status", "trusted_member", "block_domain", "list_domains", "clear_warnings", "set_admin_title", "approve_join_request", "decline_join_request", "list_reports", "resolve_report", "audit_log", "add_case_note", "list_case_notes",
+    "configure_group_control", "group_controls_status", "group_diagnostics", "configure_warning_escalation", "trusted_member", "block_domain", "list_domains", "clear_warnings", "set_admin_title", "approve_join_request", "decline_join_request", "list_reports", "resolve_report", "audit_log", "add_case_note", "list_case_notes",
 }
 
 RISK = {"safe", "risky", "dangerous"}
@@ -110,7 +110,7 @@ Never call tools yourself. Output only the JSON schema.
 Available actions: {', '.join(sorted(ACTIONS))}.
 Dangerous actions include banning, kicking, muting, deleting, pinning, changing rules/settings, publishing or deleting channel posts, external downloads, and expensive or large file processing.
 Set requires_confirmation=true for any risky or dangerous action. Require an explicit reply target or numeric user id for moderation. For download_song, require a direct permitted URL and include rights_confirmed=false until the user explicitly confirms they have permission.
-For create_skill, put a structured trigger in args.trigger and a structured action in args.action; ask for missing fields when unclear. For add_filter, use args.trigger and optional args.response/delete_message/warn. For set_lock, use args.content_type and args.enabled. For configure_group_control, use args.control and args.enabled. For trusted_member, set args.user_id and args.trusted. For block_domain, set args.domain and args.blocked. For set_welcome/set_goodbye use args.enabled and args.text. For restrict_user use args.user_id, args.mode (read_only or text_only), and bounded args.seconds. For add_case_note use args.note and optional args.report_id/args.user_id. For save_note, use args.name and args.content. For search_posts, use args.channel_id and args.query. For plugin_reply, use args.text.
+For create_skill, put a structured trigger in args.trigger and a structured action in args.action; ask for missing fields when unclear. For create_poll, use args.question, args.options (2–10 strings), and optional args.anonymous. For add_filter, use args.trigger and optional args.response/delete_message/warn. For set_lock, use args.content_type and args.enabled. For configure_group_control, use args.control and args.enabled. For configure_warning_escalation, use a bounded args.threshold and args.seconds. For trusted_member, set args.user_id and args.trusted. For block_domain, set args.domain and args.blocked. For set_welcome/set_goodbye use args.enabled and args.text. For restrict_user use args.user_id, args.mode (read_only or text_only), and bounded args.seconds. For add_case_note use args.note and optional args.report_id/args.user_id. For save_note, use args.name and args.content. For search_posts, use args.channel_id and args.query. For plugin_reply, use args.text.
 Group settings: {json.dumps(chat_settings, ensure_ascii=False)}
 Recent memory: {json.dumps(memories, ensure_ascii=False)}
 """
@@ -166,6 +166,11 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             return Plan(intent="generate_image", summary="Generate an image", action="generate_image", risk="risky", requires_confirmation=True, args={"prompt": value}, confidence=0.85)
         if any(word in low for word in ("generate a video", "create a video", "make a video")):
             return Plan(intent="generate_video", summary="Generate a video", action="generate_video", risk="risky", requires_confirmation=True, args={"prompt": value}, confidence=0.85)
+        if any(word in low for word in ("create poll", "make a poll", "start a poll")):
+            body = re.sub(r"^.*?(?:create|make|start)\s+(?:a\s+)?poll\s*:?\s*", "", value, flags=re.I).strip()
+            parts = [part.strip() for part in body.split("|") if part.strip()]
+            question, options = (parts[0], parts[1:]) if parts else ("", [])
+            return Plan(intent="create_poll", summary="Create a group poll", action="create_poll", risk="risky", requires_confirmation=True, args={"question": question, "options": options, "anonymous": "non-anonymous" not in low}, missing=[] if question and 2 <= len(options) <= 10 else ["Use: create poll: Question | Option 1 | Option 2"], confidence=0.85)
         if any(word in low for word in ("stream this", "make a streaming link", "direct link for this file")):
             return Plan(intent="stream_link", summary="Create an expiring streaming link", action="stream_link", risk="risky", requires_confirmation=True, confidence=0.9)
         if any(word in low for word in ("auto rename", "automatically rename", "rename uploads")):
@@ -192,6 +197,16 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             return Plan(intent="set_verification", summary=f"{'Enable' if enabled else 'Disable'} member verification", action="set_verification", risk="dangerous", requires_confirmation=True, args={"enabled": enabled}, confidence=0.85)
         if any(word in low for word in ("group controls", "control status", "show moderation settings", "show group settings")):
             return Plan(intent="group_controls_status", summary="Show group control status", action="group_controls_status", risk="safe", confidence=0.9)
+        if any(word in low for word in ("group diagnostics", "moderation health", "group health", "verification queue")):
+            return Plan(intent="group_diagnostics", summary="Show group moderation diagnostics", action="group_diagnostics", risk="safe", confidence=0.9)
+        if any(word in low for word in ("warning escalation", "auto mute after warnings", "warning limit")):
+            threshold_match = re.search(r"\b(\d{1,2})\b", low)
+            duration_match = re.search(r"(?:for|duration)\s+(\d{1,5})\s*(minute|minutes|hour|hours|day|days)?", low)
+            threshold = int(threshold_match.group(1)) if threshold_match else 3
+            amount = int(duration_match.group(1)) if duration_match else 60
+            unit = duration_match.group(2) if duration_match else "minutes"
+            seconds = amount * (86400 if unit.startswith("day") else 3600 if unit.startswith("hour") else 60)
+            return Plan(intent="configure_warning_escalation", summary=f"Mute after {threshold} warnings", action="configure_warning_escalation", risk="dangerous", requires_confirmation=True, args={"threshold": threshold, "seconds": seconds}, confidence=0.85)
         if any(word in low for word in ("list reports", "show reports", "open reports")):
             return Plan(intent="list_reports", summary="Show open moderation reports", action="list_reports", risk="safe", confidence=0.9)
         if any(word in low for word in ("resolve report", "close report")):

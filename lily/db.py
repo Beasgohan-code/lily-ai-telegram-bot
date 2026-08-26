@@ -25,6 +25,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "verification_prompt": "Tap the button below to confirm that you will follow this group’s rules.",
     "new_member_cooldown_seconds": 600,
     "warning_escalation": 3,
+    "warning_escalation_seconds": 3600,
     "auto_rename_enabled": settings.auto_rename_enabled,
     "auto_rename_template": settings.auto_rename_template,
     "memory_enabled": False,
@@ -350,6 +351,14 @@ class Database:
             )
             await db.commit()
             return cursor.rowcount == 1
+
+    async def list_pending_verifications(self, chat_id: int, limit: int = 30) -> list[dict[str, Any]]:
+        async with self.connect() as db:
+            rows = await (await db.execute(
+                "SELECT * FROM member_intake WHERE chat_id=? AND verification_status='pending' ORDER BY joined_at DESC LIMIT ?",
+                (chat_id, limit),
+            )).fetchall()
+            return [dict(row) for row in rows]
 
     async def clear_warnings(self, chat_id: int, user_id: int) -> int:
         async with self.connect() as db:
