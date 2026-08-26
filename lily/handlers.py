@@ -81,8 +81,10 @@ def addressed_to_lily(update: Update, bot_username: str | None) -> bool:
     text = message.text or message.caption or ""
     if message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == update.get_bot().id:
         return True
-    if bot_username and f"@{bot_username.lower()}" in text.lower():
-        return True
+    if bot_username:
+        username = bot_username.lstrip("@").lower()
+        if re.search(rf"(?<![A-Za-z0-9_])@{re.escape(username)}(?![A-Za-z0-9_])", text, re.IGNORECASE):
+            return True
     return text.lower().lstrip().startswith(("lily ", "lily,", "lily:", "lily!"))
 
 
@@ -425,6 +427,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     skill_plan = await skill_trigger(update)
     plugin_plan = await plugin_manager.plan(text_value, update.effective_chat.id, update.effective_user.id, message.message_id)
     bot_username = context.application.bot.username
+    if not bot_username:
+        bot_username = (await context.application.bot.get_me()).username
     addressed = addressed_to_lily(update, bot_username)
     if not addressed and settings_for_chat.get("mention_only", True) and skill_plan is None and plugin_plan is None:
         return
