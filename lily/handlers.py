@@ -29,6 +29,7 @@ from .group_controls import GROUP_CONTROL_MAP, control_summary
 from .bot_factory import BotFactoryError, ManagedBotFactory
 from .knowledge_library import catalog as knowledge_catalog
 from .mangadex import MangaDexError, mangadex
+from .code_workspace import code_workspace
 
 
 tools = LilyTools(db)
@@ -788,6 +789,17 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         result = await post_service.delete_last_post(update.get_bot(), channel_id)
         await db.audit(chat_id, user_id, "delete_last_post", {"channel_id": str(channel_id)})
         return f"{result} ({label})."
+    if action == "create_code_project":
+        async def workspace_progress(value: str) -> None:
+            await progress_message(update, value)
+        ctx = ToolContext(update=update, context=context, db=db, progress=workspace_progress)
+        await workspace_progress("Creating an isolated code workspace with the requested starter files…")
+        workspace = code_workspace.create_project(user_id, str(plan.args.get("project") or "lily-code-project"), str(plan.args.get("language") or "python"), str(plan.args.get("brief") or plan.summary))
+        await workspace_progress("Packaging the generated source files into a ZIP archive…")
+        archive = code_workspace.archive(user_id, str(workspace["project"]))
+        await tools.send_output(ctx, archive, f"Lily code project: {workspace['project']}")
+        await db.audit(chat_id, user_id, "create_code_project", {"project": workspace["project"], "language": workspace["language"], "file_count": len(workspace["files"])})
+        return f"Created and delivered `{workspace['project']}.zip` with {len(workspace['files'])} source file(s)."
     if action in {"rename_file", "compress_file", "encode_media", "create_file", "download_song"}:
         async def progress(value: str) -> None:
             job_id = plan.args.get("_queue_job_id") or context.user_data.get("_encoding_job_id")

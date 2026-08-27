@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 import unittest
+import zipfile
 from collections import Counter
 from dataclasses import replace
 from pathlib import Path
@@ -16,6 +17,7 @@ from lily.agent import ACTIONS, AIClient, Plan
 from lily.cli import public_agent_report
 from lily.rich import live_activity_blocks
 from lily.sandbox import sandbox_status
+from lily.code_workspace import CodeWorkspace
 from lily.model_router import ModelProfile, ModelRouter
 from lily.plugin_manager import plugin_manager
 from lily.db import Database
@@ -104,6 +106,31 @@ class LilyCoreTests(unittest.TestCase):
             self.assertEqual(results[1]["url"], "https://example.test/wiki")
 
         asyncio.run(run())
+
+    def test_code_workspace_isolated_write_validate_and_archive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = CodeWorkspace(Path(directory) / "workspaces")
+            created = workspace.create_project("user-42", "sample-code", "python", "A small demo")
+            self.assertEqual(created["language"], "python")
+            folder = workspace.mkdir("user-42", "sample-code", "src")
+            self.assertEqual(folder["directory"], "src")
+            written = workspace.write_file("user-42", "sample-code", "src/helper.py", "def hello():\n    return 'hi'\n")
+            self.assertEqual(written["file"], "src/helper.py")
+            validation = workspace.validate("user-42", "sample-code")
+            self.assertFalse(validation["execution"])
+            self.assertIn("main.py", validation["checked"])
+            archive = workspace.archive("user-42", "sample-code")
+            with zipfile.ZipFile(archive) as packaged:
+                self.assertIn("main.py", packaged.namelist())
+                self.assertIn("src/helper.py", packaged.namelist())
+            with self.assertRaises(ValueError):
+                workspace.write_file("user-42", "sample-code", "../outside.py", "no")
+
+    def test_heuristic_code_creator_makes_safe_workspace_plan(self):
+        plan = AIClient().heuristic_plan("Lily create a Python code project called hello-bot", {"chat_type": "private", "reply": {}})
+        self.assertEqual(plan.action, "create_code_project")
+        self.assertEqual(plan.args["language"], "python")
+        self.assertEqual(plan.args["project"], "hello-bot")
 
     def test_anime_announcement_has_rich_blocks_and_primary_buttons(self):
         blocks = ChannelPostService().announcement_blocks({

@@ -11,6 +11,7 @@ from .db import db
 from .knowledge_library import catalog
 from .sandbox import sandbox_status
 from .web_media import web_search
+from .code_workspace import code_workspace
 
 
 def public_agent_report(plan) -> dict[str, object]:
@@ -66,6 +67,22 @@ async def run(args: argparse.Namespace) -> int:
         results = await web_search.search(args.query, args.limit)
         print(json.dumps({"query": args.query, "results": results}, ensure_ascii=False, indent=2))
         return 0
+    if args.command == "workspace":
+        owner = args.owner
+        if args.workspace_command == "create":
+            output = code_workspace.create_project(owner, args.project, args.language, args.brief)
+        elif args.workspace_command == "mkdir":
+            output = code_workspace.mkdir(owner, args.project, args.directory)
+        elif args.workspace_command == "write":
+            output = code_workspace.write_file(owner, args.project, args.path, args.content)
+        elif args.workspace_command == "tree":
+            output = {"owner": owner, "project": args.project, "files": code_workspace.tree(owner, args.project)}
+        elif args.workspace_command == "zip":
+            output = {"owner": owner, "project": args.project, "archive": str(code_workspace.archive(owner, args.project))}
+        else:
+            output = code_workspace.validate(owner, args.project)
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
     if args.command == "plan":
         plan = await ai.plan(args.text, {"chat_type": "cli", "reply": {}}, [], {"memory_enabled": False})
         print(json.dumps(plan.__dict__, ensure_ascii=False, indent=2))
@@ -118,6 +135,26 @@ def main() -> None:
     search = sub.add_parser("search", help="Search the web through Lily’s configured provider.")
     search.add_argument("query")
     search.add_argument("--limit", type=int, default=None, help="Return 1–10 results (provider-capped).")
+    workspace = sub.add_parser("workspace", help="Create and package bounded Lily code workspaces; never executes project code.")
+    workspace.add_argument("--owner", default="local", help="Local workspace namespace; defaults to local.")
+    workspace_sub = workspace.add_subparsers(dest="workspace_command", required=True)
+    create = workspace_sub.add_parser("create", help="Create a language starter project.")
+    create.add_argument("project")
+    create.add_argument("language", choices=("python", "javascript", "typescript", "html", "css", "json", "yaml", "bash", "java", "csharp", "go", "rust"))
+    create.add_argument("brief", nargs="?", default="")
+    mkdir = workspace_sub.add_parser("mkdir", help="Create a relative folder in a workspace.")
+    mkdir.add_argument("project")
+    mkdir.add_argument("directory")
+    write = workspace_sub.add_parser("write", help="Write one bounded UTF-8 source file in a workspace.")
+    write.add_argument("project")
+    write.add_argument("path")
+    write.add_argument("content")
+    tree = workspace_sub.add_parser("tree", help="List bounded workspace files.")
+    tree.add_argument("project")
+    archive = workspace_sub.add_parser("zip", help="Create a bounded ZIP archive for a workspace.")
+    archive.add_argument("project")
+    validate = workspace_sub.add_parser("validate", help="Syntax-check supported source files without running them.")
+    validate.add_argument("project")
     sub.add_parser("skills", help="List Lily’s curated operating skills.")
     sub.add_parser("projects", help="List managed bot registry records (no secrets).")
     sub.add_parser("run-profiles", help="List approved managed-bot runtime profiles.")

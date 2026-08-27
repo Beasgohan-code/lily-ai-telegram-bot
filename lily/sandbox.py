@@ -19,6 +19,7 @@ TERMINAL_OPTIONS = (
     {"name": "doctor", "purpose": "Redacted local configuration and model health"},
     {"name": "status", "purpose": "Configured model/provider health"},
     {"name": "search", "purpose": "Configured web search for a supplied query"},
+    {"name": "workspace", "purpose": "Create, edit, validate, and ZIP Lily-owned code workspaces"},
     {"name": "agent", "purpose": "Non-executing local plan and public stages"},
     {"name": "check", "purpose": "Compile and run Lily's regression suite"},
     {"name": "bot", "purpose": "Start Lily's Telegram worker in the foreground"},

@@ -18,6 +18,7 @@ Safe controls:
   status                 Print model/provider health
   profiles               List fixed approved managed-bot run profiles
   search <query>         Search through Lily's configured web-search provider
+  workspace <action> …   Create, edit, list, ZIP, or validate an isolated code workspace
   plan <request>         Print a structured local plan
   preview <request>      Print public stages only; never executes
   agent [request]        Run Lily's safe planning agent (interactive when omitted)
@@ -59,6 +60,10 @@ case "$command" in
   agent)
     shift
     exec ./commands/cli.sh agent "$@"
+    ;;
+  workspace)
+    shift
+    exec ./commands/cli.sh workspace "$@"
     ;;
   check)
     exec ./commands/check.sh

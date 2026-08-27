@@ -16,7 +16,7 @@ ACTIONS = {
     "none", "help", "usage", "set_settings", "create_skill", "list_skills",
     "ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "restrict_user", "unrestrict_user", "demote_user", "promote_user", "delete_message", "purge_messages", "report_user",
     "warn_user", "pin_message", "unpin_message", "set_group_rules", "show_group_rules", "set_welcome", "set_goodbye", "set_verification", "welcome_member",
-    "rename_file", "compress_file", "encode_media", "create_file",
+    "rename_file", "compress_file", "encode_media", "create_file", "create_code_project",
     "download_song", "generate_image", "generate_video", "create_poll", "remember", "forget_memory", "explain_message",
     "start_channel_post", "publish_channel_post", "delete_last_post",
     "add_filter", "remove_filter", "set_lock", "save_note", "list_notes", "search_posts", "show_warnings",
@@ -144,7 +144,7 @@ Never call tools yourself. Output only the JSON schema.
 Available actions: {', '.join(sorted(ACTIONS))}.
 Dangerous actions include banning, kicking, muting, deleting, pinning, changing rules/settings, publishing or deleting channel posts, external downloads, and expensive or large file processing.
 Set requires_confirmation=true for any risky or dangerous action. Require an explicit reply target or numeric user id for moderation. For download_song, require a direct permitted URL and include rights_confirmed=false until the user explicitly confirms they have permission.
-	For create_skill, put a structured trigger in args.trigger and a structured action in args.action; ask for missing fields when unclear. For create_poll, use args.question, args.options (2–10 strings), and optional args.anonymous. For add_filter, use args.trigger and optional args.response/delete_message/warn. For set_lock, use args.content_type and args.enabled. For configure_group_control, use args.control and args.enabled. For configure_warning_escalation, use a bounded args.threshold and args.seconds. For trusted_member, set args.user_id and args.trusted. For block_domain, set args.domain and args.blocked. For set_welcome/set_goodbye use args.enabled and args.text. For restrict_user use args.user_id, args.mode (read_only or text_only), and bounded args.seconds. For add_case_note use args.note and optional args.report_id/args.user_id. For save_note, use args.name and args.content. For search_posts, use args.channel_id and args.query. For plugin_reply, use args.text.
+		For create_skill, put a structured trigger in args.trigger and a structured action in args.action; ask for missing fields when unclear. For create_poll, use args.question, args.options (2–10 strings), and optional args.anonymous. For add_filter, use args.trigger and optional args.response/delete_message/warn. For set_lock, use args.content_type and args.enabled. For configure_group_control, use args.control and args.enabled. For configure_warning_escalation, use a bounded args.threshold and args.seconds. For trusted_member, set args.user_id and args.trusted. For block_domain, set args.domain and args.blocked. For set_welcome/set_goodbye use args.enabled and args.text. For restrict_user use args.user_id, args.mode (read_only or text_only), and bounded args.seconds. For add_case_note use args.note and optional args.report_id/args.user_id. For save_note, use args.name and args.content. For search_posts, use args.channel_id and args.query. For plugin_reply, use args.text. For create_code_project, use a short args.project, args.language from python/javascript/typescript/html/css/json/yaml/bash/java/csharp/go/rust, and an args.brief. This only creates a Lily-owned source workspace and sends a ZIP; it never runs generated code or accepts shell commands.
 	Group settings: {json.dumps(chat_settings, ensure_ascii=False)}
 	Recent memory: {json.dumps(memories, ensure_ascii=False)}
 	Curated operating policy: {planning_policy()}
@@ -436,6 +436,11 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             filename = context.get("reply", {}).get("file_name")
             desired = re.search(r"(?:to|as)\s+[\"']?([^\"']+?)(?:[\"']?(?:\s+and|\s+then|$))", value, re.I)
             return Plan(intent="rename_file", summary="Rename the replied file", action="rename_file", risk="risky", requires_confirmation=True, args={"new_name": desired.group(1).strip() if desired else "", "file_name": filename or ""}, missing=[] if filename and desired else (["Reply to a file"] if not filename else ["Provide the new filename"]), confidence=0.9)
+        if any(word in low for word in ("code project", "create code", "write python", "python script", "javascript project", "typescript project", "create a website", "code creator")):
+            language = "python" if any(word in low for word in ("python", ".py", "script")) else "javascript" if any(word in low for word in ("javascript", "node", ".js")) else "typescript" if any(word in low for word in ("typescript", ".ts")) else "html" if any(word in low for word in ("html", "website", "web page")) else "python"
+            named = re.search(r"(?:project|app|script)(?:\s+(?:called|named))?\s+([a-zA-Z][a-zA-Z0-9_-]{1,62})", value, re.I)
+            project = (named.group(1) if named else f"lily-{language}-project").replace("_", "-").lower()
+            return Plan(intent="code_creator", summary=f"Create a {language} starter project", action="create_code_project", risk="safe", args={"project": project, "language": language, "brief": value}, confidence=0.85)
         if any(word in low for word in ("compress", "zip", "reduce the size")):
             filename = context.get("reply", {}).get("file_name")
             return Plan(intent="compress_file", summary="Compress the replied file", action="compress_file", risk="risky", requires_confirmation=True, args={"file_name": filename or "", "format": "zip"}, missing=[] if filename else ["Reply to the file to compress"], confidence=0.9)
