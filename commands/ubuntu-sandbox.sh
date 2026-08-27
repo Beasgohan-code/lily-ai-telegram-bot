@@ -25,6 +25,7 @@ Safe controls:
   service <action> …                Inspect allowed managed services; control is disabled by default
   plan <request>         Print a structured local plan
   preview <request>      Print public stages only; never executes
+  team <request>         Run a bounded specialist-team review; never executes
   agent [request]        Run Lily's safe planning agent (interactive when omitted)
   ask <question>         Ask Lily a local conversational question
   check                  Compile and run regression tests
@@ -51,7 +52,7 @@ case "$command" in
     shift
     exec ./commands/cli.sh roles "$@"
     ;;
-  plan|preview|ask|search)
+  plan|preview|team|ask|search)
     shift
     if [[ "$#" -eq 0 ]]; then
       echo "Error: $command needs a request." >&2

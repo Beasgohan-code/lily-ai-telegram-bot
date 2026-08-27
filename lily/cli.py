@@ -15,6 +15,7 @@ from .code_workspace import code_workspace
 from .skill_engine import select_skill
 from .service_supervisor import ManagedServiceSupervisor
 from .agent_roles import assign_roles, catalog as agent_role_catalog
+from .agent_team import public_team_summary
 
 
 def public_agent_report(plan) -> dict[str, object]:
@@ -28,12 +29,14 @@ def public_agent_report(plan) -> dict[str, object]:
         "missing": plan.missing,
         "public_stages": plan.public_stages(),
         "roles": assign_roles(plan).public_dict(),
+        "agent_team": public_team_summary(plan),
         "executes": False,
     }
 
 
-async def _agent_plan(text: str) -> dict[str, object]:
-    plan = await ai.plan(text, {"chat_type": "cli", "reply": {}}, [], {"memory_enabled": False})
+async def _agent_plan(text: str, team: bool = False) -> dict[str, object]:
+    planner = ai.team_plan if team else ai.plan
+    plan = await planner(text, {"chat_type": "cli", "reply": {}}, [], {"memory_enabled": False})
     return public_agent_report(plan)
 
 
@@ -115,6 +118,9 @@ async def run(args: argparse.Namespace) -> int:
         plan = await ai.plan(args.text, {"chat_type": "cli", "reply": {}}, [], {"memory_enabled": False})
         print(json.dumps(plan.__dict__, ensure_ascii=False, indent=2))
         return 0
+    if args.command == "team":
+        print(json.dumps(await _agent_plan(args.text, team=True), ensure_ascii=False, indent=2))
+        return 0
     if args.command == "ask":
         answer = await ai.answer(args.text, {"chat_type": "cli", "reply": {}}, [], {"memory_enabled": False})
         print(answer)
@@ -149,6 +155,8 @@ async def run(args: argparse.Namespace) -> int:
             "local_bot_api": settings.use_local_bot_api,
             "rich_live_previews": settings.rich_live_previews,
             "rich_visible_progress": settings.rich_visible_progress,
+            "agent_team_enabled": settings.enable_agent_team,
+            "agent_team_max_roles": settings.agent_team_max_roles,
             "managed_provisioning_enabled": settings.enable_managed_project_provisioning and not settings.bot_factory_dry_run,
             "model_profiles": len(statuses),
             "available_models": sum(bool(item.get("available")) for item in statuses),
@@ -215,6 +223,8 @@ def main() -> None:
         child.add_argument("text")
     preview = sub.add_parser("preview", help="Show a non-executing public action preview.")
     preview.add_argument("text")
+    team = sub.add_parser("team", help="Run a non-executing bounded agent-team review and public plan preview.")
+    team.add_argument("text")
     agent = sub.add_parser("agent", help="Run a safe local planning agent; it never executes actions.")
     agent.add_argument("text", nargs="?", help="Optional request to plan; omit for an interactive prompt.")
     agent.add_argument("--ask", action="store_true", help="Answer the supplied text conversationally instead of planning it.")

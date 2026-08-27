@@ -32,6 +32,7 @@ from .mangadex import MangaDexError, mangadex
 from .code_workspace import code_workspace
 from .skill_engine import select_skill
 from .agent_roles import assign_roles, catalog as agent_role_catalog, catalog_summary
+from .agent_team import public_team_stages
 
 
 tools = LilyTools(db)
@@ -788,7 +789,7 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         roles = agent_role_catalog()
         rows = [["Division", "Roles"]]
         rows.extend([[str(item["division"]), str(item["roles"])] for item in catalog_summary()])
-        await rich.send(chat_id, [heading("Lily specialist roles", 2), paragraph(f"Lily has {len(roles)} curated specialist roles."), table(rows, compact=True), paragraph("Use the operator CLI with `roles --division <name>` for the complete catalog. Roles coordinate one Lily workflow through existing approval and capability checks; they do not create unrestricted tools or privileged processes.")])
+        await rich.send(chat_id, [heading("Lily specialist roles", 2), paragraph(f"Lily has {len(roles)} curated specialist roles."), table(rows, compact=True), paragraph("When bounded team review is enabled, Lily selects only the relevant primary specialist and a small reviewer set. Every role works through the same approval and capability checks; no role receives unrestricted tools or privileged processes.")])
         return f"Lily has {len(roles)} curated specialist roles."
     if action == "skill_status":
         runs = await db.list_skill_runs(chat_id, user_id, limit=10)
@@ -912,7 +913,7 @@ async def handle_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: 
     plan.enforce_safety()
     roles = assign_roles(plan)
     plan.args["_assigned_roles"] = roles.public_dict()
-    public_stages = [*roles.public_stages(), *plan.public_stages()]
+    public_stages = [*roles.public_stages(), *public_team_stages(plan), *plan.public_stages()]
     if plan.missing:
         await _finish_skill_plan(plan, "needs_details", "Lily needs additional details")
         await rich.send(update.effective_chat.id, [heading("I need one more detail", 3), paragraph(plan.summary), list_block(plan.missing)])
@@ -1032,7 +1033,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await handle_plan(update, context, skill_plan, settings_for_chat)
         return
     memories = await db.recent_memories(f"chat:{update.effective_chat.id}:user:{update.effective_user.id}")
-    plan = await ai.plan(text_value, _reply_context(update), memories, settings_for_chat)
+    plan = await ai.team_plan(text_value, _reply_context(update), memories, settings_for_chat)
     await handle_plan(update, context, plan, settings_for_chat)
 
 

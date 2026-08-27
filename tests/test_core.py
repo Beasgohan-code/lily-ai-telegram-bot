@@ -16,7 +16,8 @@ from unittest.mock import patch
 
 import httpx
 
-from lily.agent import ACTIONS, AIClient, Plan
+from lily.agent import ACTIONS, AIClient, AgentTeamMemo, Plan
+from lily.agent_team import merge_role_reviews, public_team_summary, redact_team_text, role_review_context, select_roles
 from lily.main import public_error_message
 from lily.cli import public_agent_report
 from lily.rich import live_activity_blocks
@@ -162,6 +163,90 @@ class LilyCoreTests(unittest.TestCase):
         self.assertEqual(moderation.primary.slug, "community-moderator")
         self.assertIn("safety-reviewer", [role.slug for role in moderation.reviewers])
         self.assertTrue(AIClient().heuristic_plan("show agent roles", {"reply": {}}).action == "show_agent_roles")
+
+    def test_agent_team_is_bounded_and_primary_role_stays_relevant(self):
+        code_plan = Plan.from_dict({"action": "create_code_project", "risk": "safe", "args": {}, "missing": [], "summary": "Create a project"})
+        roles = select_roles(code_plan, "Create a Python API project with tests and a database", 99)
+        self.assertLessEqual(len(roles), 4)
+        self.assertEqual(roles[0].slug, "code-creator")
+        self.assertEqual(len({role.slug for role in roles}), len(roles))
+
+    def test_agent_team_redacts_credentials_commands_and_private_reasoning(self):
+        value = "token: super-secret-value\n$ curl https://example.invalid\nInternal analysis: step by step"
+        safe = redact_team_text(value)
+        self.assertNotIn("super-secret-value", safe)
+        self.assertNotIn("curl https://", safe)
+        self.assertNotIn("step by step", safe)
+        context = role_review_context(value, Plan(action="web_search", summary="Find public results"))
+        self.assertEqual(set(context), {"request", "central_plan"})
+        self.assertNotIn("super-secret-value", json.dumps(context))
+
+    def test_agent_team_merges_only_safety_constraints_not_role_authority(self):
+        plan = Plan.from_dict({"intent": "ban_user", "summary": "Ban a member", "action": "ban_user", "risk": "safe", "requires_confirmation": False, "args": {"user_id": 12345}, "missing": [], "confidence": 0.9})
+        memo = AgentTeamMemo("Safety Reviewer", "assurance", "token: hidden-value", "safe", False, ("Confirm the moderation target",))
+        merged = merge_role_reviews(plan, [memo])
+        self.assertEqual(merged.action, "ban_user")
+        self.assertEqual(merged.args["user_id"], 12345)
+        self.assertEqual(merged.risk, "dangerous")
+        self.assertTrue(merged.requires_confirmation)
+        self.assertIn("Confirm the moderation target", merged.missing)
+        team = merged.args["_agent_team"]
+        self.assertEqual(team["reviewed_count"], 1)
+        self.assertNotIn("hidden-value", json.dumps(team))
+        self.assertNotIn("args", team["members"][0])
+        public = public_team_summary(merged)
+        self.assertEqual(public["reviewed_count"], 1)
+        self.assertNotIn("summary", json.dumps(public))
+        self.assertNotIn("hidden-value", json.dumps(public))
+        malformed = Plan(args={"_agent_team": {"mode": "llm-reviewed", "members": [], "reviewed_count": "not-a-number"}})
+        self.assertEqual(public_team_summary(malformed)["reviewed_count"], 0)
+
+    def test_agent_team_model_failure_preserves_primary_plan(self):
+        class FailingTeamClient(AIClient):
+            @property
+            def providers(self):
+                return [object()]
+
+            async def plan(self, text, context, memories, chat_settings):
+                return Plan.from_dict({"action": "web_search", "summary": "Search the web", "args": {"query": "Lily"}, "missing": []})
+
+            async def _role_memo(self, role, text, plan):
+                return None
+
+        team_settings = replace(settings, enable_agent_team=True, agent_team_max_roles=3)
+        with patch("lily.agent.settings", team_settings):
+            result = asyncio.run(FailingTeamClient().team_plan("search Lily", {"reply": {}}, [], {}))
+        self.assertEqual(result.action, "web_search")
+        self.assertNotIn("_agent_team", result.args)
+
+    def test_agent_team_live_review_path_is_bounded_redacted_and_safety_monotonic(self):
+        class TeamClient(AIClient):
+            def __init__(self):
+                self.payloads = []
+
+            @property
+            def providers(self):
+                return [object()]
+
+            async def plan(self, text, context, memories, chat_settings):
+                return Plan.from_dict({"action": "create_poll", "summary": "Create a poll", "risk": "risky", "requires_confirmation": True, "args": {"question": "Choose"}, "missing": []})
+
+            async def _request(self, payload, requirement="chat"):
+                self.payloads.append(payload)
+                return {"choices": [{"message": {"content": json.dumps({"summary": "Reviewed safely", "risk": "safe", "requires_confirmation": False, "missing": []})}}]}
+
+        team_settings = replace(settings, enable_agent_team=True, agent_team_max_roles=2)
+        client = TeamClient()
+        with patch("lily.agent.settings", team_settings):
+            result = asyncio.run(client.team_plan("Create a poll. token: 1234567890", {"reply": {}}, [], {}))
+        self.assertEqual(len(client.payloads), 2)
+        self.assertEqual(result.action, "create_poll")
+        self.assertEqual(result.risk, "risky")
+        self.assertTrue(result.requires_confirmation)
+        self.assertEqual(result.args["question"], "Choose")
+        sent_to_roles = json.dumps(client.payloads)
+        self.assertNotIn("1234567890", sent_to_roles)
+        self.assertEqual(public_team_summary(result)["reviewed_count"], 2)
 
     def test_anime_announcement_has_rich_blocks_and_primary_buttons(self):
         blocks = ChannelPostService().announcement_blocks({

@@ -108,7 +108,17 @@ Lily also includes a constrained service-supervisor interface for registered man
 
 ## Curated specialist agent roles
 
-Lily now routes work through an independently designed catalog of **200-plus** specialist-role cards spanning coordination, engineering, design, product, quality, security, operations, research, analysis, communication, community, content, media, automation, strategy, finance, academic, geospatial, healthcare, and game development. Each request has one accountable primary role and may receive bounded reviewers such as **Safety Reviewer**, **Privacy Guardian**, or **Test Engineer**. These roles organize one central Lily workflow; they cannot grant new permissions, start hidden processes, add tools, suppress confirmations, or reveal private model reasoning. Ask **“Lily, show agent roles”** for a safe Telegram division summary, run `./commands/ubuntu-sandbox.sh roles` for the full local catalog, or use `./commands/ubuntu-sandbox.sh roles --division engineering` for a focused view.
+Lily has an independently designed catalog of **200-plus** specialist-role cards spanning coordination, engineering, design, product, quality, security, operations, research, analysis, communication, community, content, media, automation, strategy, finance, academic, geospatial, healthcare, and game development. The catalog was informed by a review of the supplied agency-role taxonomies, but Lily’s cards and prompts are independently authored; no external role prompt, installer, or executable workflow is imported.
+
+By default, catalog roles provide deterministic routing and public workflow labels only. To enable a real, bounded LLM specialist review, set `LILY_ENABLE_AGENT_TEAM=true`. Lily first obtains a single central action plan, then selects the relevant primary specialist and a small reviewer group—**three roles total by default**, capped at four. Each selected role receives only a truncated, credential-redacted request and the central action summary. Its structured memo can raise the risk level, require confirmation, or identify missing information; it cannot change the action, edit action arguments, add tools, call external services, bypass permissions, or reduce safety requirements. Lily then reconstructs and safety-enforces the one accountable central plan before the existing permission and confirmation path is reached.
+
+```env
+LILY_ENABLE_AGENT_TEAM=true
+LILY_AGENT_TEAM_MAX_ROLES=3
+LILY_AGENT_TEAM_TIMEOUT=20
+```
+
+The team feature uses the existing configured structured-output model router, provider privacy filtering, health checks, cooldowns, and fallback order. If specialist calls are unavailable or fail, Lily safely retains the original central plan rather than retrying indefinitely or expanding the team. Telegram shows a compact public status such as “bounded specialist review complete”; it does not show individual memo text, chain-of-thought, raw prompts, credentials, model responses, or command details. Use `./commands/ubuntu-sandbox.sh team "<request>"` for a **non-executing** local team-preview report. Ask **“Lily, show agent roles”** for a safe Telegram division summary, run `./commands/ubuntu-sandbox.sh roles` for the full local catalog, or use `./commands/ubuntu-sandbox.sh roles --division engineering` for a focused view.
 
 ## Recommended next advanced features
 
@@ -223,6 +233,7 @@ The `commands/` directory contains safe host-operator scripts:
 ./commands/cli.sh doctor            # redacted local health/config status
 ./commands/cli.sh run-profiles      # fixed approved managed-bot profiles
 ./commands/cli.sh preview "Lily set group title to Anime Club"  # preview only; does not execute
+./commands/ubuntu-sandbox.sh team "Create a Python API project with tests"  # optional bounded team review; never executes
 ./commands/ubuntu-sandbox.sh roles  # curated specialist role catalog
 ./commands/ubuntu-sandbox.sh service status <slug> --owner <id>  # disabled unless explicitly enabled
 ./commands/run-bot.sh               # start Telegram worker locally
