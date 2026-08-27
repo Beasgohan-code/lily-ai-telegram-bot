@@ -45,6 +45,8 @@ class EncodingQueue:
     async def enqueue(self, update: Any, context: Any, plan: Any, executor: Callable[..., Awaitable[str]]) -> str:
         await self.start()
         job_id = uuid.uuid4().hex[:12]
+        if hasattr(plan, "args") and isinstance(plan.args, dict):
+            plan.args["_queue_job_id"] = job_id
         await self.db.create_encoding_job(job_id, update.effective_chat.id, update.effective_user.id, {"plan": plan.__dict__ if hasattr(plan, "__dict__") else plan})
         await self.queue.put(QueueItem(job_id, update, context, plan, executor))
         return job_id

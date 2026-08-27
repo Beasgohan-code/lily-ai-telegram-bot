@@ -6,6 +6,8 @@ This library contains the durable operating knowledge for Lily’s named skills.
 |---|---|
 | `moderation` | Group governance, 60+ controls, confirmation, auditing, and enforcement limits. |
 | `media` | Rename, inspection, encoding, streaming, and direct-file safety checks. |
+| `series-release` | Manual catalog tracking, release verification, announcement preparation, and rights-aware direct-file delivery. |
+| `queue` | Persistent job states, progress, ownership, cancellation, failure recovery, and delivery outcome reporting. |
 | `channels` | Drafting, approval, publishing, deletion, and post indexing. |
 | `model-routing` | Free → Gemini → OpenAI → Groq priority and privacy-tier fallback. |
 | `bot-operations` | Managed project records, allow-listed repositories, isolated environments, and dry-run provisioning. |

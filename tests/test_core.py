@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import httpx
 
-from lily.agent import AIClient
+from lily.agent import AIClient, Plan
 from lily.model_router import ModelProfile, ModelRouter
 from lily.plugin_manager import plugin_manager
 from lily.db import Database
@@ -379,6 +379,34 @@ class LilyCoreTests(unittest.TestCase):
         self.assertFalse(plan.args["rights_confirmed"])
         self.assertIn("explicit distribution-rights confirmation", plan.missing)
 
+    def test_encoding_queue_assigns_owner_bound_job_id_to_a_plan(self):
+        async def run():
+            class Message:
+                message_id = 1
+            class Chat:
+                id = 8
+            class User:
+                id = 9
+            class UpdateStub:
+                effective_chat = Chat()
+                effective_user = User()
+                effective_message = Message()
+            class ContextStub:
+                user_data: dict[str, object] = {}
+            with tempfile.TemporaryDirectory() as directory:
+                database = Database(str(Path(directory) / "queue.sqlite3"))
+                await database.init()
+                from lily.queue_manager import EncodingQueue
+                queue = EncodingQueue(database)
+                plan = Plan(action="download_chapter", args={"title": "Licensed title"})
+                async def worker(*_args):
+                    return "done"
+                job_id = await queue.enqueue(UpdateStub(), ContextStub(), plan, worker)
+                self.assertEqual(plan.args["_queue_job_id"], job_id)
+                self.assertEqual((await database.get_encoding_job(job_id))["state"], "queued")
+                await queue.stop()
+        asyncio.run(run())
+
     def test_managed_provisioning_requires_two_explicit_gates(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -403,7 +431,7 @@ class LilyCoreTests(unittest.TestCase):
 
     def test_curated_operating_skill_catalogue_is_bounded_and_read_only(self):
         names = {item["name"] for item in knowledge_catalog()}
-        self.assertTrue({"agent-workflow", "moderation", "media", "bot-operations", "deployment"}.issubset(names))
+        self.assertTrue({"agent-workflow", "moderation", "media", "series-release", "queue", "bot-operations", "deployment"}.issubset(names))
         self.assertIn("never expose hidden chain-of-thought", read_skill("agent-workflow").lower())
         with self.assertRaises(KeyError):
             read_skill("../../etc/passwd")

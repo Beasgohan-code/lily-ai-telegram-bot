@@ -15,6 +15,8 @@ SKILLS = {
     "agent-workflow": "Safe plan validation, confirmation, execution, and audit stages.",
     "moderation": "Group moderation controls, permissions, verification, and audits.",
     "media": "File handling, rename, queues, encoding, streaming, and source safeguards.",
+    "series-release": "Manual title tracking, verified release updates, and rights-aware chapter-file delivery.",
+    "queue": "Persistent job ownership, stages, cancellation, failure handling, recovery, and capacity limits.",
     "channels": "Rich channel drafts, publish verification, and post management.",
     "model-routing": "Private provider fallback order, health, cooldowns, and privacy tiers.",
     "bot-operations": "Approved bot projects, environment templates, and dry-run provisioning.",

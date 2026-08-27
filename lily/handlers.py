@@ -7,6 +7,7 @@ from pathlib import Path
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 from telegram import ChatPermissions, Update
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes, MessageHandler, filters
@@ -519,7 +520,14 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         series = await db.get_tracked_series(chat_id, title) if title else None
         if not series:
             return "Track the series first so Lily has an approved title record; Lily does not search or scrape chapter sites."
+        if not plan.args.get("_queue_job_id"):
+            job_id = await encoding_queue.enqueue(update, context, plan, execute_plan)
+            await db.update_encoding_job(job_id, progress="Queued approved chapter-file retrieval…")
+            return f"Queued approved chapter delivery as job `{job_id}`. Ask Lily for queue status or cancel job `{job_id}` if needed."
         async def chapter_progress(value: str) -> None:
+            job_id = str(plan.args.get("_queue_job_id") or "")
+            if job_id:
+                await db.update_encoding_job(job_id, progress=value)
             await progress_message(update, value)
         ctx = ToolContext(update=update, context=context, db=db, progress=chapter_progress)
         try:
@@ -737,7 +745,7 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         return f"{result} ({label})."
     if action in {"rename_file", "compress_file", "encode_media", "create_file", "download_song"}:
         async def progress(value: str) -> None:
-            job_id = context.user_data.get("_encoding_job_id")
+            job_id = plan.args.get("_queue_job_id") or context.user_data.get("_encoding_job_id")
             if job_id:
                 await db.update_encoding_job(job_id, progress=value)
             await progress_message(update, value)

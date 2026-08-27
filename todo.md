@@ -51,3 +51,6 @@
 - [x] Review the referenced telegram-ai-agent deployment guidance and independently adapt only compatible deployment, health, and operating practices.
 - [x] Create a curated Lily project-knowledge library and skill playbooks for moderation, media, channel posts, provider routing, bot operations, deployment, and Mini App integration.
 - [x] Add a visible multi-step plan policy that reports concise task stages and confirmations without exposing private chain-of-thought or enabling arbitrary tool execution.
+- [x] Add a bounded chapter-distribution queue for public-domain, licensed, or user-provided DRM-free direct files, with stored rights attestation, source allow-list validation, progress, retries, cancellation, and per-file delivery outcomes.
+- [x] Add rich owner-bound queue status, pagination, and audit views for approved chapter-distribution jobs without scraping third-party chapter sites.
+- [x] Expand Lily knowledge `SKILL.md` playbooks with detailed rights-aware media, release-tracker, queue, and operational protocols.
