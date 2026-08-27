@@ -191,6 +191,23 @@ class Database:
                     started_at INTEGER,
                     finished_at INTEGER
                 );
+                CREATE TABLE IF NOT EXISTS code_project_jobs (
+                    job_id TEXT PRIMARY KEY,
+                    chat_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    project TEXT NOT NULL,
+                    language TEXT NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'queued',
+                    stage TEXT NOT NULL DEFAULT '',
+                    artifact_name TEXT NOT NULL DEFAULT '',
+                    file_count INTEGER NOT NULL DEFAULT 0,
+                    error TEXT NOT NULL DEFAULT '',
+                    cancel_requested INTEGER NOT NULL DEFAULT 0,
+                    created_at INTEGER NOT NULL,
+                    started_at INTEGER,
+                    finished_at INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_code_project_jobs_chat_user_created ON code_project_jobs(chat_id, user_id, created_at DESC);
                 CREATE TABLE IF NOT EXISTS trusted_members (
                     chat_id INTEGER NOT NULL,
                     user_id INTEGER NOT NULL,
@@ -636,6 +653,79 @@ class Database:
             else:
                 rows = await (await db.execute("SELECT * FROM skill_runs WHERE chat_id=? AND user_id=? ORDER BY created_at DESC LIMIT ?", (chat_id, user_id, limit))).fetchall()
             return [dict(row) for row in rows]
+
+    async def create_code_project_job(self, chat_id: int, user_id: int, project: str, language: str) -> str:
+        job_id = uuid.uuid4().hex
+        async with self.connect() as db:
+            await db.execute(
+                "INSERT INTO code_project_jobs(job_id,chat_id,user_id,project,language,created_at) VALUES(?,?,?,?,?,?)",
+                (job_id, chat_id, user_id, project[:63], language[:32], int(time.time())),
+            )
+            await db.commit()
+        return job_id
+
+    async def start_code_project_job(self, job_id: str) -> bool:
+        async with self.connect() as db:
+            cursor = await db.execute(
+                "UPDATE code_project_jobs SET state='running',stage='Preparing isolated workspace',started_at=? WHERE job_id=? AND state='queued' AND cancel_requested=0",
+                (int(time.time()), job_id),
+            )
+            await db.commit()
+            return cursor.rowcount == 1
+
+    async def update_code_project_job(self, job_id: str, stage: str) -> None:
+        async with self.connect() as db:
+            await db.execute("UPDATE code_project_jobs SET stage=? WHERE job_id=? AND state='running'", (stage[:300], job_id))
+            await db.commit()
+
+    async def code_project_cancelled(self, job_id: str) -> bool:
+        async with self.connect() as db:
+            row = await (await db.execute("SELECT cancel_requested FROM code_project_jobs WHERE job_id=?", (job_id,))).fetchone()
+            return bool(row and row["cancel_requested"])
+
+    async def request_code_project_cancel(self, job_id: str, chat_id: int, user_id: int) -> bool:
+        async with self.connect() as db:
+            cursor = await db.execute(
+                "UPDATE code_project_jobs SET cancel_requested=1,state=CASE WHEN state='queued' THEN 'cancelled' ELSE state END,stage=CASE WHEN state='queued' THEN 'Cancelled before execution' ELSE stage END,finished_at=CASE WHEN state='queued' THEN ? ELSE finished_at END WHERE job_id=? AND chat_id=? AND user_id=? AND state IN ('queued','running')",
+                (int(time.time()), job_id, chat_id, user_id),
+            )
+            await db.commit()
+            return cursor.rowcount == 1
+
+    async def finish_code_project_job(self, job_id: str, state: str, stage: str, *, artifact_name: str = "", file_count: int = 0, error: str = "") -> None:
+        final_state = state if state in {"completed", "cancelled", "failed"} else "failed"
+        async with self.connect() as db:
+            await db.execute(
+                "UPDATE code_project_jobs SET state=?,stage=?,artifact_name=?,file_count=?,error=?,finished_at=? WHERE job_id=?",
+                (final_state, stage[:300], artifact_name[:160], max(0, min(int(file_count), 200)), error[:500], int(time.time()), job_id),
+            )
+            await db.commit()
+
+    async def get_code_project_job(self, job_id: str, chat_id: int, user_id: int) -> dict[str, Any] | None:
+        async with self.connect() as db:
+            row = await (await db.execute("SELECT * FROM code_project_jobs WHERE job_id=? AND chat_id=? AND user_id=?", (job_id, chat_id, user_id))).fetchone()
+            return dict(row) if row else None
+
+    async def list_code_project_jobs(self, chat_id: int, user_id: int, limit: int = 10) -> list[dict[str, Any]]:
+        bounded = max(1, min(int(limit), 50))
+        async with self.connect() as db:
+            rows = await (await db.execute("SELECT * FROM code_project_jobs WHERE chat_id=? AND user_id=? ORDER BY created_at DESC LIMIT ?", (chat_id, user_id, bounded))).fetchall()
+            return [dict(row) for row in rows]
+
+    async def list_code_project_jobs_for_user(self, user_id: int, limit: int = 20) -> list[dict[str, Any]]:
+        bounded = max(1, min(int(limit), 50))
+        async with self.connect() as db:
+            rows = await (await db.execute("SELECT * FROM code_project_jobs WHERE user_id=? ORDER BY created_at DESC LIMIT ?", (user_id, bounded))).fetchall()
+            return [dict(row) for row in rows]
+
+    async def request_code_project_cancel_for_user(self, job_id: str, user_id: int) -> bool:
+        async with self.connect() as db:
+            cursor = await db.execute(
+                "UPDATE code_project_jobs SET cancel_requested=1,state=CASE WHEN state='queued' THEN 'cancelled' ELSE state END,stage=CASE WHEN state='queued' THEN 'Cancelled before execution' ELSE stage END,finished_at=CASE WHEN state='queued' THEN ? ELSE finished_at END WHERE job_id=? AND user_id=? AND state IN ('queued','running')",
+                (int(time.time()), job_id, user_id),
+            )
+            await db.commit()
+            return cursor.rowcount == 1
 
     async def add_warning(self, chat_id: int, user_id: int, reason: str) -> int:
         async with self.connect() as db:

@@ -13,6 +13,8 @@ from .sandbox import sandbox_status
 from .web_media import web_search
 from .code_workspace import code_workspace
 from .skill_engine import select_skill
+from .service_supervisor import ManagedServiceSupervisor
+from .agent_roles import assign_roles, catalog as agent_role_catalog
 
 
 def public_agent_report(plan) -> dict[str, object]:
@@ -25,6 +27,7 @@ def public_agent_report(plan) -> dict[str, object]:
         "confirmation_required": plan.requires_confirmation,
         "missing": plan.missing,
         "public_stages": plan.public_stages(),
+        "roles": assign_roles(plan).public_dict(),
         "executes": False,
     }
 
@@ -98,6 +101,16 @@ async def run(args: argparse.Namespace) -> int:
     if args.command == "skill-runs":
         print(json.dumps(await db.list_skill_runs(args.chat_id, args.user_id, args.limit), ensure_ascii=False, indent=2))
         return 0
+    if args.command == "service":
+        supervisor = ManagedServiceSupervisor()
+        if args.service_command == "status":
+            output = await supervisor.status(args.slug, args.owner)
+        elif args.service_command == "logs":
+            output = await supervisor.logs(args.slug, args.owner, args.limit)
+        else:
+            output = await supervisor.control(args.slug, args.owner, args.service_command)
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
     if args.command == "plan":
         plan = await ai.plan(args.text, {"chat_type": "cli", "reply": {}}, [], {"memory_enabled": False})
         print(json.dumps(plan.__dict__, ensure_ascii=False, indent=2))
@@ -119,6 +132,9 @@ async def run(args: argparse.Namespace) -> int:
         return 0
     if args.command == "skills":
         print(json.dumps(catalog(), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "roles":
+        print(json.dumps(agent_role_catalog(), ensure_ascii=False, indent=2))
         return 0
     if args.command == "projects":
         print(json.dumps(await db.list_managed_projects(), ensure_ascii=False, indent=2))
@@ -178,7 +194,18 @@ def main() -> None:
     skill_runs.add_argument("chat_id", type=int)
     skill_runs.add_argument("--user-id", type=int, default=None)
     skill_runs.add_argument("--limit", type=int, default=20)
+    service = sub.add_parser("service", help="Inspect or control an explicitly allowed managed systemd service.")
+    service_sub = service.add_subparsers(dest="service_command", required=True)
+    for name in ("status", "start", "stop", "restart"):
+        item = service_sub.add_parser(name)
+        item.add_argument("slug")
+        item.add_argument("--owner", type=int, required=True, help="Registered managed-project owner ID.")
+    logs = service_sub.add_parser("logs")
+    logs.add_argument("slug")
+    logs.add_argument("--owner", type=int, required=True, help="Registered managed-project owner ID.")
+    logs.add_argument("--limit", type=int, default=50)
     sub.add_parser("skills", help="List Lily’s curated operating skills.")
+    sub.add_parser("roles", help="List Lily’s curated specialist agent roles.")
     sub.add_parser("projects", help="List managed bot registry records (no secrets).")
     sub.add_parser("run-profiles", help="List approved managed-bot runtime profiles.")
     sub.add_parser("doctor", help="Print redacted deployment and capability diagnostics.")

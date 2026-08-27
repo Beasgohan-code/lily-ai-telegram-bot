@@ -31,6 +31,7 @@ from .knowledge_library import catalog as knowledge_catalog
 from .mangadex import MangaDexError, mangadex
 from .code_workspace import code_workspace
 from .skill_engine import select_skill
+from .agent_roles import assign_roles, catalog as agent_role_catalog
 
 
 tools = LilyTools(db)
@@ -783,6 +784,12 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         name = str(plan.args.get("name") or plan.args.get("skill_name") or "Custom Lily skill")[:80]
         skill_id = await db.save_skill(chat_id, user_id, name, trigger, skill_action, str(plan.args.get("confirmation", "risky")), int(plan.args.get("cooldown_seconds", 0) or 0), int(plan.args.get("priority", 100) or 100), str(plan.args.get("execution_mode", "suggest")))
         return f"Skill **{name}** was created with ID `{skill_id[:8]}`."
+    if action == "show_agent_roles":
+        roles = agent_role_catalog()
+        rows = [["Role", "Division", "Outcome"]]
+        rows.extend([[role["name"], role["division"], role["deliverable"]] for role in roles])
+        await rich.send(chat_id, [heading("Lily specialist roles", 2), table(rows, compact=True), paragraph("Roles coordinate a single Lily workflow through the existing approval and capability checks. They do not create unrestricted tools or independent privileged processes.")])
+        return f"Lily has {len(roles)} curated specialist roles."
     if action == "skill_status":
         runs = await db.list_skill_runs(chat_id, user_id, limit=10)
         if not runs:
@@ -817,16 +824,50 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         await db.audit(chat_id, user_id, "delete_last_post", {"channel_id": str(channel_id)})
         return f"{result} ({label})."
     if action == "create_code_project":
+        requested_project = str(plan.args.get("project") or "lily-code-project")
+        requested_language = str(plan.args.get("language") or "python")
+        job_id = await db.create_code_project_job(chat_id, user_id, requested_project, requested_language)
+        if not await db.start_code_project_job(job_id):
+            return f"Code-project job `{job_id[:12]}` was cancelled before it started."
         async def workspace_progress(value: str) -> None:
+            await db.update_code_project_job(job_id, value)
             await progress_message(update, value)
         ctx = ToolContext(update=update, context=context, db=db, progress=workspace_progress)
-        await workspace_progress("Creating an isolated code workspace with the requested starter files…")
-        workspace = code_workspace.create_project(user_id, str(plan.args.get("project") or "lily-code-project"), str(plan.args.get("language") or "python"), str(plan.args.get("brief") or plan.summary))
-        await workspace_progress("Packaging the generated source files into a ZIP archive…")
-        archive = code_workspace.archive(user_id, str(workspace["project"]))
-        await tools.send_output(ctx, archive, f"Lily code project: {workspace['project']}")
-        await db.audit(chat_id, user_id, "create_code_project", {"project": workspace["project"], "language": workspace["language"], "file_count": len(workspace["files"])})
-        return f"Created and delivered `{workspace['project']}.zip` with {len(workspace['files'])} source file(s)."
+        try:
+            await workspace_progress("Creating an isolated code workspace with the requested starter files…")
+            if await db.code_project_cancelled(job_id):
+                await db.finish_code_project_job(job_id, "cancelled", "Cancelled before project files were created")
+                return f"Code-project job `{job_id[:12]}` was cancelled."
+            workspace = code_workspace.create_project(user_id, requested_project, requested_language, str(plan.args.get("brief") or plan.summary))
+            await workspace_progress("Packaging the generated source files into a ZIP archive…")
+            if await db.code_project_cancelled(job_id):
+                await db.finish_code_project_job(job_id, "cancelled", "Cancelled before archive delivery", file_count=len(workspace["files"]))
+                return f"Code-project job `{job_id[:12]}` was cancelled before delivery."
+            archive = code_workspace.archive(user_id, str(workspace["project"]))
+            await workspace_progress("Uploading the generated project archive…")
+            await tools.send_output(ctx, archive, f"Lily code project: {workspace['project']}")
+            await db.finish_code_project_job(job_id, "completed", "Delivered project archive", artifact_name=f"{workspace['project']}.zip", file_count=len(workspace["files"]))
+            await db.audit(chat_id, user_id, "create_code_project", {"job_id": job_id[:12], "project": workspace["project"], "language": workspace["language"], "file_count": len(workspace["files"])})
+            return f"Created and delivered `{workspace['project']}.zip` with {len(workspace['files'])} source file(s). Job: `{job_id[:12]}`."
+        except Exception as exc:
+            await db.finish_code_project_job(job_id, "failed", "Project creation failed", error=type(exc).__name__)
+            raise
+    if action == "code_project_status":
+        job_id = str(plan.args.get("job_id") or "").strip()
+        if job_id:
+            job = await db.get_code_project_job(job_id, chat_id, user_id)
+            jobs = [job] if job else []
+        else:
+            jobs = await db.list_code_project_jobs(chat_id, user_id)
+        if not jobs:
+            return "No code-project jobs were found for you in this chat."
+        return "\n".join(f"• `{item['job_id'][:12]}` — {item['project']} ({item['language']}): {item['state']} — {item['stage']}" for item in jobs)[:3500]
+    if action == "cancel_code_project":
+        job_id = str(plan.args.get("job_id") or "").strip()
+        if not job_id:
+            return "Provide the code-project job ID shown in Lily’s project status."
+        cancelled = await db.request_code_project_cancel(job_id, chat_id, user_id)
+        return f"Cancellation was requested for code-project job `{job_id[:12]}`." if cancelled else "That active code-project job was not found for you in this chat."
     if action in {"rename_file", "compress_file", "encode_media", "create_file", "download_song"}:
         async def progress(value: str) -> None:
             job_id = plan.args.get("_queue_job_id") or context.user_data.get("_encoding_job_id")
@@ -869,6 +910,9 @@ async def handle_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: 
     if plan.action in {"ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "restrict_user", "unrestrict_user", "demote_user", "promote_user", "warn_user", "member_profile", "show_warnings"} and not plan.args.get("user_id") and reply_target:
         plan.args["user_id"] = int(reply_target)
     plan.enforce_safety()
+    roles = assign_roles(plan)
+    plan.args["_assigned_roles"] = roles.public_dict()
+    public_stages = [*roles.public_stages(), *plan.public_stages()]
     if plan.missing:
         await _finish_skill_plan(plan, "needs_details", "Lily needs additional details")
         await rich.send(update.effective_chat.id, [heading("I need one more detail", 3), paragraph(plan.summary), list_block(plan.missing)])
@@ -900,7 +944,7 @@ async def handle_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: 
     if plan.action == "none":
         memories = await db.recent_memories(f"chat:{update.effective_chat.id}:user:{update.effective_user.id}")
         if settings.rich_live_previews:
-            await rich.preview(update.effective_chat.id, plan.summary or "Preparing a response", plan.public_stages(), draft_id=f"progress:{update.update_id}", status="Preparing a safe response.")
+            await rich.preview(update.effective_chat.id, plan.summary or "Preparing a response", public_stages, draft_id=f"progress:{update.update_id}", status="Preparing a safe response.")
         answer = await ai.answer(plan.args.get("prompt", plan.summary), _reply_context(update), memories, chat_settings)
         await send_long_rich(update.effective_chat.id, answer, title="Lily", reply_to=update.effective_message.message_id)
         return
@@ -908,12 +952,12 @@ async def handle_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: 
         action_id = await db.create_pending(update.effective_chat.id, update.effective_user.id, plan.action, _plan_dict(plan), settings.confirmation_ttl_seconds)
         extra = "For audio downloads, Yes confirms you have permission to download the material." if plan.action == "download_song" else "For chapter files, Yes confirms you have already declared distribution rights for the approved direct source." if plan.action == "download_chapter" else "Lily will execute this only after you approve it."
         if settings.rich_live_previews:
-            await rich.preview(update.effective_chat.id, plan.summary, plan.public_stages(), draft_id=action_id, status="Waiting for the requester’s confirmation.")
-        await rich.send(update.effective_chat.id, [heading("Confirmation required", 2), paragraph(plan.summary), table([["Action", plan.action], ["Risk", plan.risk], ["Requested by", update.effective_user.full_name]]), details("Planned stages", [list_block(plan.public_stages())]), activity_status("Waiting for the requester’s decision."), paragraph(extra)], reply_markup=confirmation_keyboard(action_id), reply_to=update.effective_message.message_id)
+            await rich.preview(update.effective_chat.id, plan.summary, public_stages, draft_id=action_id, status="Waiting for the requester’s confirmation.")
+        await rich.send(update.effective_chat.id, [heading("Confirmation required", 2), paragraph(plan.summary), table([["Action", plan.action], ["Risk", plan.risk], ["Requested by", update.effective_user.full_name]]), details("Planned stages", [list_block(public_stages)]), activity_status("Waiting for the requester’s decision."), paragraph(extra)], reply_markup=confirmation_keyboard(action_id), reply_to=update.effective_message.message_id)
         return
     if settings.rich_live_previews:
-        await rich.preview(update.effective_chat.id, plan.summary, plan.public_stages(), draft_id=f"progress:{update.update_id}", status="Preparing the approved Lily action.")
-    blocks = [heading("Lily plan", 3), list_block(plan.public_stages())]
+        await rich.preview(update.effective_chat.id, plan.summary, public_stages, draft_id=f"progress:{update.update_id}", status="Preparing the approved Lily action.")
+    blocks = [heading("Lily plan", 3), list_block(public_stages)]
     if settings.rich_visible_progress:
         blocks.append(activity_status("Validating the approved request."))
     await rich.send(update.effective_chat.id, blocks, reply_to=update.effective_message.message_id)

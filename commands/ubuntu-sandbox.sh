@@ -17,10 +17,12 @@ Safe controls:
   sandbox                Print bounded local-runtime capabilities
   status                 Print model/provider health
   profiles               List fixed approved managed-bot run profiles
+  roles                  List Lily's curated specialist agent roles
   search <query>         Search through Lily's configured web-search provider
   workspace <action> …   Create, edit, list, ZIP, or validate an isolated code workspace
   skill-match <chat> <user> <text>  Preview automatic skill selection; never executes
   skill-runs <chat> [options]       List redacted automatic-skill outcomes
+  service <action> …                Inspect allowed managed services; control is disabled by default
   plan <request>         Print a structured local plan
   preview <request>      Print public stages only; never executes
   agent [request]        Run Lily's safe planning agent (interactive when omitted)
@@ -39,9 +41,10 @@ case "$command" in
   help|-h|--help)
     usage
     ;;
-  doctor|sandbox|status|profiles)
+  doctor|sandbox|status|profiles|roles)
     case "$command" in
       profiles) exec ./commands/cli.sh run-profiles ;;
+      roles) exec ./commands/cli.sh roles ;;
       *) exec ./commands/cli.sh "$command" ;;
     esac
     ;;
@@ -70,6 +73,10 @@ case "$command" in
   skill-match|skill-runs)
     shift
     exec ./commands/cli.sh "$command" "$@"
+    ;;
+  service)
+    shift
+    exec ./commands/cli.sh service "$@"
     ;;
   check)
     exec ./commands/check.sh

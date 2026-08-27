@@ -13,10 +13,10 @@ from .knowledge_library import planning_policy
 
 
 ACTIONS = {
-    "none", "help", "usage", "set_settings", "create_skill", "list_skills", "skill_status",
+    "none", "help", "usage", "set_settings", "create_skill", "list_skills", "skill_status", "show_agent_roles",
     "ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "restrict_user", "unrestrict_user", "demote_user", "promote_user", "delete_message", "purge_messages", "report_user",
     "warn_user", "pin_message", "unpin_message", "set_group_rules", "show_group_rules", "set_welcome", "set_goodbye", "set_verification", "welcome_member",
-    "rename_file", "compress_file", "encode_media", "create_file", "create_code_project",
+    "rename_file", "compress_file", "encode_media", "create_file", "create_code_project", "code_project_status", "cancel_code_project",
     "download_song", "generate_image", "generate_video", "create_poll", "remember", "forget_memory", "explain_message",
     "start_channel_post", "publish_channel_post", "delete_last_post",
     "add_filter", "remove_filter", "set_lock", "save_note", "list_notes", "search_posts", "show_warnings",
@@ -144,7 +144,7 @@ Never call tools yourself. Output only the JSON schema.
 Available actions: {', '.join(sorted(ACTIONS))}.
 Dangerous actions include banning, kicking, muting, deleting, pinning, changing rules/settings, publishing or deleting channel posts, external downloads, and expensive or large file processing.
 Set requires_confirmation=true for any risky or dangerous action. Require an explicit reply target or numeric user id for moderation. For download_song, require a direct permitted URL and include rights_confirmed=false until the user explicitly confirms they have permission.
-		For create_skill, put a structured trigger in args.trigger and a structured action in args.action; use args.execution_mode as auto or suggest, args.confirmation as never/risky/always, bounded args.cooldown_seconds (0–86400), and args.priority (0–1000). Only a fixed safe reply action may use automatic mode with confirmation never; all other skills must preserve confirmation. For create_poll, use args.question, args.options (2–10 strings), and optional args.anonymous. For add_filter, use args.trigger and optional args.response/delete_message/warn. For set_lock, use args.content_type and args.enabled. For configure_group_control, use args.control and args.enabled. For configure_warning_escalation, use a bounded args.threshold and args.seconds. For trusted_member, set args.user_id and args.trusted. For block_domain, set args.domain and args.blocked. For set_welcome/set_goodbye use args.enabled and args.text. For restrict_user use args.user_id, args.mode (read_only or text_only), and bounded args.seconds. For add_case_note use args.note and optional args.report_id/args.user_id. For save_note, use args.name and args.content. For search_posts, use args.channel_id and args.query. For plugin_reply, use args.text. For create_code_project, use a short args.project, args.language from python/javascript/typescript/html/css/json/yaml/bash/java/csharp/go/rust, and an args.brief. This only creates a Lily-owned source workspace and sends a ZIP; it never runs generated code or accepts shell commands.
+		For create_skill, put a structured trigger in args.trigger and a structured action in args.action; use args.execution_mode as auto or suggest, args.confirmation as never/risky/always, bounded args.cooldown_seconds (0–86400), and args.priority (0–1000). Only a fixed safe reply action may use automatic mode with confirmation never; all other skills must preserve confirmation. For create_poll, use args.question, args.options (2–10 strings), and optional args.anonymous. For add_filter, use args.trigger and optional args.response/delete_message/warn. For set_lock, use args.content_type and args.enabled. For configure_group_control, use args.control and args.enabled. For configure_warning_escalation, use a bounded args.threshold and args.seconds. For trusted_member, set args.user_id and args.trusted. For block_domain, set args.domain and args.blocked. For set_welcome/set_goodbye use args.enabled and args.text. For restrict_user use args.user_id, args.mode (read_only or text_only), and bounded args.seconds. For add_case_note use args.note and optional args.report_id/args.user_id. For save_note, use args.name and args.content. For search_posts, use args.channel_id and args.query. For plugin_reply, use args.text. For create_code_project, use a short args.project, args.language from python/javascript/typescript/html/css/json/yaml/bash/java/csharp/go/rust, and an args.brief. This only creates a Lily-owned source workspace and sends a ZIP; it never runs generated code or accepts shell commands. For code_project_status, optionally use args.job_id. For cancel_code_project, require an exact args.job_id and preserve requester-scoped cancellation.
 	Group settings: {json.dumps(chat_settings, ensure_ascii=False)}
 	Recent memory: {json.dumps(memories, ensure_ascii=False)}
 	Curated operating policy: {planning_policy()}
@@ -379,6 +379,13 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             return Plan(intent="create_skill", summary="Create a custom trigger skill", action="create_skill", risk="risky", requires_confirmation=True, args={"description": value}, confidence=0.8)
         if any(phrase in low for phrase in ("skill status", "skill activity", "skill runs", "automation status")):
             return Plan(intent="skill_status", summary="Show your automatic skill activity", action="skill_status", confidence=0.9)
+        if any(phrase in low for phrase in ("list agents", "show agents", "agent roles", "what agents", "available agents")):
+            return Plan(intent="show_agent_roles", summary="Show Lily’s specialist agent roles", action="show_agent_roles", confidence=0.95)
+        if any(phrase in low for phrase in ("cancel code project", "cancel project job", "stop code project")):
+            job_id = next(iter(re.findall(r"\b[a-f0-9]{12,64}\b", low)), "")
+            return Plan(intent="cancel_code_project", summary="Cancel your code-project job", action="cancel_code_project", risk="risky", requires_confirmation=True, args={"job_id": job_id}, missing=[] if job_id else ["Provide the code-project job ID shown in its status"])
+        if any(phrase in low for phrase in ("code project status", "project job status", "my code projects", "my project jobs")):
+            return Plan(intent="code_project_status", summary="Show your recent code-project jobs", action="code_project_status", confidence=0.9)
         if "list skills" in low or "what skills" in low:
             return Plan(intent="list_skills", summary="List enabled skills", action="list_skills", confidence=0.9)
         if any(word in low for word in ("demote", "remove admin", "take away admin")):

@@ -24,6 +24,14 @@ Lily’s code creator writes only under `work/code-workspaces/<owner>/<project>/
 
 The `bot` and `api` commands intentionally run in the foreground for local development. The available terminal actions are fixed (`doctor`, `sandbox`, `status`, `search`, `agent`, `check`, `bot`, and `api`) and do not accept arbitrary commands. A sandbox terminal is not a permanent host; use a supervised service on an always-on Ubuntu machine for production.
 
+## Managed service supervisor
+
+`./commands/ubuntu-sandbox.sh service status <slug> --owner <telegram-user-id>` can inspect only an explicitly registered and allow-listed managed service. `start`, `stop`, `restart`, and `logs` use fixed `systemctl --user` or `journalctl --user` argument lists; none accepts a shell command. The supervisor is **disabled by default**. Before enabling it on an always-on Ubuntu host, set `LILY_ENABLE_MANAGED_SERVICE_SUPERVISOR=true`, list exact registered slugs in `LILY_ALLOWED_MANAGED_SERVICES`, and install their corresponding `lily-managed-<slug>.service` units. Service logs are redacted before display.
+
 ## LLM orchestration and automatic skills
 
 Use `./commands/ubuntu-sandbox.sh skill-match <chat_id> <user_id> "<message>"` to obtain a non-executing preview. It reports whether Lily would select a matching automatic skill or fall back to the LLM agent plan, along with a safe action summary, risk, confirmation requirement, cooldown state, and public stages. Use `./commands/ubuntu-sandbox.sh skill-runs <chat_id> --user-id <user_id>` to inspect redacted run outcomes. These operator commands cannot execute a skill or interpret text as a shell command.
+
+## Specialist agent roles
+
+`./commands/ubuntu-sandbox.sh roles` lists Lily’s curated specialist roles across engineering, quality, operations, media, content, research, community, product, communication, and automation. A request is assigned a primary role and, where needed, reviewers such as Safety Reviewer, Privacy Guardian, and Test Engineer. Roles organize a single accountable Lily workflow; they do not create arbitrary subprocesses, external accounts, privileged tools, or hidden reasoning.

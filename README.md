@@ -96,7 +96,19 @@ The CLI uses Lily’s configured multi-model fallback router and prints either m
 
 ## Telegram Mini App
 
-The optional `lily-miniapp/` project is a polished Telegram Web App dashboard for live agent activity, moderation controls, skills, media queues, search, and channel-post preparation. It currently ships as an interface-first companion and reads Telegram’s Web App client script; connecting it to Lily’s live database requires an authenticated backend bridge that verifies Telegram `initData` and exposes only the requesting admin’s group data. Do not trust Mini App client input without that server-side verification.
+The optional `lily-miniapp/` project is a polished Telegram Web App dashboard for live agent activity, moderation controls, skills, media queues, search, and channel-post preparation. Lily now includes a server-side FastAPI bridge for this dashboard. The bridge validates the raw Telegram `initData` HMAC with the bot token, applies a bounded auth timestamp, and returns only the authenticated user’s code-project jobs and managed-project summaries. It also supports requester-scoped cancellation for active code-project jobs.
+
+The bridge remains **disabled by default**. Before activation, set `LILY_ENABLE_MINIAPP_BRIDGE=true`, set `LILY_MINIAPP_ALLOWED_ORIGINS` to the exact HTTPS Mini App origin, and deploy the FastAPI service behind HTTPS. The existing static Mini App is not yet connected to a production Lily API URL; configure that client connection only after the server is deployed. Never trust Mini App client input without server-side `initData` validation.
+
+## Durable code-project jobs and managed service supervision
+
+Code-project creation now creates a durable job record with queued, running, completed, cancelled, or failed state; public stage text; artifact name; source-file count; and requester-scoped cancellation. Ask Lily for **“my code projects”** or **“cancel code project `<job-id>`”** to inspect or cancel your own active project jobs.
+
+Lily also includes a constrained service-supervisor interface for registered managed projects. It is disabled by default and accepts only explicit registered slugs on `LILY_ALLOWED_MANAGED_SERVICES`. When enabled on a hardened Ubuntu host, it sends fixed `systemctl --user` and `journalctl --user` argument lists for status, start, stop, restart, and redacted logs. It does not accept shell commands, arbitrary unit names, or cross-owner project control.
+
+## Curated specialist agent roles
+
+Lily now routes work through a curated specialist-role catalog spanning coordination, engineering, quality, operations, media, content, research, community, product, communication, analysis, and automation. Each request has one accountable primary role and may receive bounded reviewers such as **Safety Reviewer**, **Privacy Guardian**, or **Test Engineer**. These roles organize one central Lily workflow; they cannot grant new permissions, start hidden processes, add tools, suppress confirmations, or reveal private model reasoning. Ask **“Lily, show agent roles”** or run `./commands/ubuntu-sandbox.sh roles` to inspect the catalog.
 
 ## Recommended next advanced features
 
@@ -211,6 +223,8 @@ The `commands/` directory contains safe host-operator scripts:
 ./commands/cli.sh doctor            # redacted local health/config status
 ./commands/cli.sh run-profiles      # fixed approved managed-bot profiles
 ./commands/cli.sh preview "Lily set group title to Anime Club"  # preview only; does not execute
+./commands/ubuntu-sandbox.sh roles  # curated specialist role catalog
+./commands/ubuntu-sandbox.sh service status <slug> --owner <id>  # disabled unless explicitly enabled
 ./commands/run-bot.sh               # start Telegram worker locally
 ./commands/run-api.sh               # start standalone FastAPI service locally
 ```
@@ -219,12 +233,8 @@ These scripts are intentionally for the server operator only; they do not create
 
 ## References
 
-[1]: https://core.telegram.org/bots/api "Telegram Bot API reference"
-
-## References
-
-- [Telegram Bot API](https://core.telegram.org/bots/api)
-- [Telegram Bot Features](https://core.telegram.org/bots/features)
-- [Telegram Bot API changelog](https://core.telegram.org/bots/api-changelog)
-- [python-telegram-bot documentation](https://docs.python-telegram-bot.org/)
-- [python-telegram-bot Rich Messages tracking issue](https://github.com/python-telegram-bot/python-telegram-bot/issues/5261)
+[1]: [Telegram Bot API reference](https://core.telegram.org/bots/api)
+[2]: [Telegram Mini Apps: validating init data](https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app)
+[3]: [Telegram Bot API changelog](https://core.telegram.org/bots/api-changelog)
+[4]: [python-telegram-bot documentation](https://docs.python-telegram-bot.org/)
+[5]: [python-telegram-bot Rich Messages tracking issue](https://github.com/python-telegram-bot/python-telegram-bot/issues/5261)

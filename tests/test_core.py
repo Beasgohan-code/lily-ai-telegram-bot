@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import os
 import tempfile
@@ -9,6 +11,7 @@ import zipfile
 from collections import Counter
 from dataclasses import replace
 from pathlib import Path
+from urllib.parse import urlencode
 from unittest.mock import patch
 
 import httpx
@@ -20,6 +23,9 @@ from lily.rich import live_activity_blocks
 from lily.sandbox import sandbox_status
 from lily.code_workspace import CodeWorkspace
 from lily.skill_engine import select_skill
+from lily.service_supervisor import ManagedServiceSupervisor, ProcessResult, SupervisorError
+from lily.agent_roles import assign_roles, catalog as agent_role_catalog
+from lily.miniapp_bridge import MiniAppAuthError, validate_init_data
 from lily.model_router import ModelProfile, ModelRouter
 from lily.plugin_manager import plugin_manager
 from lily.db import Database
@@ -120,6 +126,7 @@ class LilyCoreTests(unittest.TestCase):
             workspace = CodeWorkspace(Path(directory) / "workspaces")
             created = workspace.create_project("user-42", "sample-code", "python", "A small demo")
             self.assertEqual(created["language"], "python")
+            self.assertIn(".lily-project.json", [item["path"] for item in created["files"]])
             folder = workspace.mkdir("user-42", "sample-code", "src")
             self.assertEqual(folder["directory"], "src")
             written = workspace.write_file("user-42", "sample-code", "src/helper.py", "def hello():\n    return 'hi'\n")
@@ -139,6 +146,20 @@ class LilyCoreTests(unittest.TestCase):
         self.assertEqual(plan.action, "create_code_project")
         self.assertEqual(plan.args["language"], "python")
         self.assertEqual(plan.args["project"], "hello-bot")
+        self.assertEqual(AIClient().heuristic_plan("show my code projects", {"reply": {}}).action, "code_project_status")
+        cancellation = AIClient().heuristic_plan("cancel code project abcdef123456", {"reply": {}})
+        self.assertEqual(cancellation.action, "cancel_code_project")
+        self.assertTrue(cancellation.requires_confirmation)
+
+    def test_role_catalog_assigns_specialists_without_bypassing_safety(self):
+        self.assertGreaterEqual(len(agent_role_catalog()), 20)
+        assignment = assign_roles(Plan(action="create_code_project", risk="safe"))
+        self.assertEqual(assignment.primary.slug, "code-creator")
+        self.assertIn("privacy-guardian", [role.slug for role in assignment.reviewers])
+        moderation = assign_roles(Plan(action="ban_user", risk="dangerous", requires_confirmation=True))
+        self.assertEqual(moderation.primary.slug, "community-moderator")
+        self.assertIn("safety-reviewer", [role.slug for role in moderation.reviewers])
+        self.assertTrue(AIClient().heuristic_plan("show agent roles", {"reply": {}}).action == "show_agent_roles")
 
     def test_anime_announcement_has_rich_blocks_and_primary_buttons(self):
         blocks = ChannelPostService().announcement_blocks({
@@ -296,6 +317,90 @@ class LilyCoreTests(unittest.TestCase):
                 self.assertEqual(item["progress"], "50%")
                 await database.update_encoding_job("abc123", state="completed", progress="Completed")
                 self.assertEqual((await database.get_encoding_job("abc123"))["state"], "completed")
+        asyncio.run(run())
+
+    def test_code_project_job_lifecycle_is_requester_scoped(self):
+        async def run():
+            with tempfile.TemporaryDirectory() as directory:
+                database = Database(str(Path(directory) / "projects.sqlite3"))
+                await database.init()
+                job_id = await database.create_code_project_job(101, 7, "hello-bot", "python")
+                self.assertTrue(await database.start_code_project_job(job_id))
+                await database.update_code_project_job(job_id, "Packaging source archive")
+                item = await database.get_code_project_job(job_id, 101, 7)
+                self.assertEqual(item["state"], "running")
+                self.assertEqual(item["stage"], "Packaging source archive")
+                self.assertFalse(await database.request_code_project_cancel(job_id, 101, 8))
+                self.assertTrue(await database.request_code_project_cancel(job_id, 101, 7))
+                self.assertTrue(await database.code_project_cancelled(job_id))
+                await database.finish_code_project_job(job_id, "cancelled", "Cancelled before delivery", file_count=3)
+                final = await database.get_code_project_job(job_id, 101, 7)
+                self.assertEqual(final["state"], "cancelled")
+                self.assertEqual(final["file_count"], 3)
+                self.assertEqual(len(await database.list_code_project_jobs(101, 7)), 1)
+        asyncio.run(run())
+
+    def test_miniapp_init_data_validation_and_requester_scoped_cancellation(self):
+        token = "test-miniapp-token"
+        values = {
+            "auth_date": "1000",
+            "query_id": "AAE",
+            "user": json.dumps({"id": 77, "first_name": "Lily", "username": "lily_owner"}, separators=(",", ":")),
+        }
+        check_string = "\n".join(f"{key}={values[key]}" for key in sorted(values))
+        secret = hmac.new(b"WebAppData", token.encode("utf-8"), hashlib.sha256).digest()
+        init_data = urlencode({**values, "hash": hmac.new(secret, check_string.encode("utf-8"), hashlib.sha256).hexdigest()})
+        user = validate_init_data(init_data, token, max_age_seconds=300, now=1050)
+        self.assertEqual(user.id, 77)
+        self.assertEqual(user.public_dict()["username"], "lily_owner")
+        with self.assertRaises(MiniAppAuthError):
+            validate_init_data(init_data.replace("AAE", "BAD"), token, max_age_seconds=300, now=1050)
+        with self.assertRaises(MiniAppAuthError):
+            validate_init_data(init_data, token, max_age_seconds=60, now=1200)
+
+        async def run():
+            with tempfile.TemporaryDirectory() as directory:
+                database = Database(str(Path(directory) / "miniapp.sqlite3"))
+                await database.init()
+                job_id = await database.create_code_project_job(101, 77, "bridge-project", "python")
+                self.assertTrue(await database.request_code_project_cancel_for_user(job_id, 77))
+                self.assertFalse(await database.request_code_project_cancel_for_user(job_id, 78))
+                job = await database.get_code_project_job(job_id, 101, 77)
+                self.assertEqual(job["state"], "cancelled")
+        asyncio.run(run())
+
+    def test_managed_service_supervisor_is_allowlisted_owned_and_redacted(self):
+        async def run():
+            with tempfile.TemporaryDirectory() as directory:
+                database = Database(str(Path(directory) / "supervisor.sqlite3"))
+                await database.init()
+                await database.register_managed_project({
+                    "slug": "demo-bot", "repository_url": "https://github.com/example/demo-bot", "runtime": "python",
+                    "run_profile": "python-main", "run_target": "main.py", "project_root": "/srv/lily/projects/demo-bot",
+                    "env_path": "/etc/lily/projects/demo-bot.env", "owner_id": 7, "state": "registered",
+                })
+                calls: list[list[str]] = []
+
+                async def runner(command: list[str]) -> ProcessResult:
+                    calls.append(command)
+                    if command[0] == "journalctl":
+                        return ProcessResult(0, "API_KEY=not-for-users\nAuthorization: Bearer secret-value\nnormal line", "")
+                    return ProcessResult(0, "active\nrunning\nloaded", "")
+
+                disabled = ManagedServiceSupervisor(database, replace(settings, enable_managed_service_supervisor=False, allowed_managed_service_slugs=("demo-bot",)), runner)
+                report = await disabled.status("demo-bot", 7)
+                self.assertFalse(report["enabled"])
+                self.assertEqual(calls, [])
+                enabled = ManagedServiceSupervisor(database, replace(settings, enable_managed_service_supervisor=True, allowed_managed_service_slugs=("demo-bot",)), runner)
+                self.assertEqual((await enabled.status("demo-bot", 7))["state"], "available")
+                self.assertEqual(calls[-1][:3], ["systemctl", "--user", "show"])
+                await enabled.control("demo-bot", 7, "restart")
+                self.assertEqual(calls[-1], ["systemctl", "--user", "restart", "lily-managed-demo-bot.service"])
+                logs = await enabled.logs("demo-bot", 7)
+                self.assertIn("[REDACTED]", logs["lines"])
+                self.assertNotIn("secret-value", logs["lines"])
+                with self.assertRaises(SupervisorError):
+                    await enabled.status("demo-bot", 8)
         asyncio.run(run())
 
     def test_automatic_skill_selection_preserves_approvals_and_cooldowns(self):

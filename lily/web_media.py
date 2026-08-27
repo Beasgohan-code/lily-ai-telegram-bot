@@ -10,10 +10,12 @@ from urllib.parse import urlencode
 
 import httpx
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from .config import settings
 from .db import db
+from .miniapp_bridge import install_miniapp_routes
 
 
 class WebSearch:
@@ -110,6 +112,9 @@ class StreamLinks:
 
 def create_app() -> FastAPI:
     app = stream_links.app()
+    if settings.miniapp_allowed_origins:
+        app.add_middleware(CORSMiddleware, allow_origins=list(settings.miniapp_allowed_origins), allow_credentials=False, allow_methods=["GET", "POST"], allow_headers=["Authorization", "Content-Type", "X-Telegram-Init-Data"])
+    install_miniapp_routes(app)
 
     @app.on_event("startup")
     async def startup() -> None:
