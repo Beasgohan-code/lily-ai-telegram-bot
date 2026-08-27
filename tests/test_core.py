@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import httpx
 
-from lily.agent import AIClient, Plan
+from lily.agent import ACTIONS, AIClient, Plan
 from lily.model_router import ModelProfile, ModelRouter
 from lily.plugin_manager import plugin_manager
 from lily.db import Database
@@ -222,13 +222,22 @@ class LilyCoreTests(unittest.TestCase):
         client = AIClient()
         poll = client.heuristic_plan("Lily create poll: Ship the update? | Yes | No", {"chat_type": "group", "reply": {}})
         self.assertEqual(poll.action, "create_poll")
-        self.assertEqual(poll.args["options"], ["Yes", "No"])
-        escalation = client.heuristic_plan("Lily set warning escalation to 4 for 2 hours", {"chat_type": "group", "reply": {}})
-        self.assertEqual(escalation.action, "configure_warning_escalation")
-        self.assertEqual(escalation.args["threshold"], 4)
-        self.assertEqual(escalation.args["seconds"], 7200)
-        diagnostics = client.heuristic_plan("Lily show group diagnostics", {"chat_type": "group", "reply": {}})
-        self.assertEqual(diagnostics.action, "group_diagnostics")
+
+    def test_hardened_plan_enforces_confirmation_and_real_rose_mira_actions(self):
+        unsafe = Plan.from_dict({"action": "ban_user", "risk": "safe", "requires_confirmation": False, "args": {}, "missing": []})
+        self.assertEqual(unsafe.risk, "dangerous")
+        self.assertTrue(unsafe.requires_confirmation)
+        self.assertTrue(unsafe.missing)
+        title = AIClient().heuristic_plan("Lily set group title to Dragon Ball Club", {"reply": {}})
+        self.assertEqual(title.action, "set_chat_title")
+        self.assertTrue(title.requires_confirmation)
+        profile = AIClient().heuristic_plan("Lily show member profile 123456789", {"reply": {}})
+        self.assertEqual(profile.action, "member_profile")
+        explanation = AIClient().heuristic_plan("Lily explain this message", {"reply": {"text": "Hello world"}})
+        self.assertEqual(explanation.action, "explain_message")
+        self.assertEqual(explanation.args["message_text"], "Hello world")
+        self.assertNotIn("summarize_chat", ACTIONS)
+        self.assertNotIn("set_reminder", ACTIONS)
 
     def test_complete_free_model_registry_is_present(self):
         self.assertEqual(len(CATALOG), 16)

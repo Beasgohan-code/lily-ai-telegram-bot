@@ -45,6 +45,7 @@ ADMIN_ACTIONS = {
     "tool_capabilities",
     "show_operating_skills",
     "mangadex_search", "mangadex_feed",
+    "member_profile", "set_chat_title", "set_chat_description",
 }
 
 
@@ -65,6 +66,8 @@ def _reply_context(update: Update) -> dict[str, Any]:
         if reply.from_user:
             result["reply"]["user_id"] = reply.from_user.id
             result["reply"]["user_name"] = reply.from_user.full_name
+        if reply.text or reply.caption:
+            result["reply"]["text"] = (reply.text or reply.caption or "")[:3900]
         file_info = None
         if reply.document:
             file_info = {"file_name": reply.document.file_name or "file.bin", "file_size": reply.document.file_size or 0, "file_id": reply.document.file_id}
@@ -466,6 +469,27 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         rows = [["Chapter", "Title", "Language", "Groups"]] + [[item["chapter"], item["title"], item["language"], item["groups"]] for item in results]
         await rich.send(chat_id, [heading("MangaDex release-feed metadata", 2), table(rows), blockquote("Source: MangaDex. Scanlation groups are shown as attribution metadata; Lily does not provide a reader or download flow.")])
         return f"Displayed {len(results)} MangaDex release-feed record(s)."
+    if action == "member_profile":
+        target = int(plan.args.get("user_id") or 0)
+        member = await update.get_bot().get_chat_member(chat_id, target)
+        user = member.user
+        await rich.send(chat_id, [heading("Member profile", 2), table([["Member", user.full_name], ["User ID", str(user.id)], ["Status", member.status], ["Bot", "yes" if user.is_bot else "no"]])])
+        await db.audit(chat_id, user_id, "member_profile", {"user_id": target, "status": member.status})
+        return f"Displayed member status for {user.full_name}."
+    if action == "set_chat_title":
+        title = str(plan.args.get("title") or "").strip()[:128]
+        await update.get_bot().set_chat_title(chat_id, title)
+        await db.audit(chat_id, user_id, "set_chat_title", {"title": title})
+        return f"Updated the group title to `{title}`."
+    if action == "set_chat_description":
+        description = str(plan.args.get("description") or "").strip()[:255]
+        await update.get_bot().set_chat_description(chat_id, description)
+        await db.audit(chat_id, user_id, "set_chat_description", {"length": len(description)})
+        return "Updated the group description."
+    if action == "explain_message":
+        message_text = str(plan.args.get("message_text") or "").strip()
+        settings_for_chat = await db.get_chat_settings(chat_id, update.effective_chat.title or "")
+        return await ai.answer(f"Explain this quoted Telegram message clearly and concisely. Do not infer facts not in the message:\n\n{message_text}", _reply_context(update), [], settings_for_chat)
     if action == "list_managed_projects":
         projects = await db.list_managed_projects(user_id)
         if not projects:
@@ -792,15 +816,17 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         await db.add_memory(f"chat:{chat_id}:user:{user_id}", content, user_id, chat_id)
         return "I saved that memory for this chat and user."
     if action == "forget_memory":
-        return "Memory deletion should be implemented with a targeted memory ID in the next storage migration."
-    if action == "set_reminder":
-        return "The reminder skill is registered as an extension point; connect Lily’s persistent scheduler before enabling autonomous reminders."
-    if action in {"summarize_chat", "extract_tasks", "translate", "web_research", "create_poll"}:
-        return "This skill is recognized by Lily’s agent router and is ready for a provider-specific integration. The core backend keeps the action permissioned instead of pretending it completed."
+        removed = await db.delete_latest_memory(f"chat:{chat_id}:user:{user_id}", user_id)
+        await db.audit(chat_id, user_id, "forget_memory", {"removed": removed})
+        return "Removed your most recently saved Lily memory for this chat." if removed else "There is no saved Lily memory to remove for this chat."
     return "The request was understood, but no executable skill is enabled for it yet."
 
 
 async def handle_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: Plan, chat_settings: dict[str, Any]) -> None:
+    reply_target = _reply_context(update).get("reply", {}).get("user_id")
+    if plan.action in {"ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "restrict_user", "unrestrict_user", "demote_user", "promote_user", "warn_user", "member_profile", "show_warnings"} and not plan.args.get("user_id") and reply_target:
+        plan.args["user_id"] = int(reply_target)
+    plan.enforce_safety()
     if plan.missing:
         await rich.send(update.effective_chat.id, [heading("I need one more detail", 3), paragraph(plan.summary), list_block(plan.missing)])
         return

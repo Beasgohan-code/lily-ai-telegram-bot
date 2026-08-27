@@ -697,6 +697,15 @@ class Database:
             )).fetchall()
             return [row["content"] for row in reversed(rows)]
 
+    async def delete_latest_memory(self, scope_key: str, user_id: int) -> bool:
+        async with self.connect() as db:
+            row = await (await db.execute("SELECT id FROM memories WHERE scope_key=? AND user_id=? ORDER BY id DESC LIMIT 1", (scope_key, user_id))).fetchone()
+            if not row:
+                return False
+            await db.execute("DELETE FROM memories WHERE id=?", (row["id"],))
+            await db.commit()
+            return True
+
     async def audit(self, chat_id: int | None, actor_id: int | None, event: str, detail: dict[str, Any]) -> None:
         async with self.connect() as db:
             await db.execute(

@@ -16,9 +16,8 @@ ACTIONS = {
     "none", "help", "usage", "set_settings", "create_skill", "list_skills",
     "ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "restrict_user", "unrestrict_user", "demote_user", "promote_user", "delete_message", "purge_messages", "report_user",
     "warn_user", "pin_message", "unpin_message", "set_group_rules", "show_group_rules", "set_welcome", "set_goodbye", "set_verification", "welcome_member",
-    "rename_file", "compress_file", "encode_media", "create_file", "summarize_file",
-    "download_song", "set_reminder", "summarize_chat", "extract_tasks", "translate",
-    "web_research", "generate_image", "generate_video", "create_poll", "remember", "forget_memory",
+    "rename_file", "compress_file", "encode_media", "create_file",
+    "download_song", "generate_image", "generate_video", "create_poll", "remember", "forget_memory", "explain_message",
     "start_channel_post", "publish_channel_post", "delete_last_post",
     "add_filter", "remove_filter", "set_lock", "save_note", "list_notes", "search_posts", "show_warnings",
     "plugin_reply", "model_status", "queue_status", "queue_list", "cancel_queue_job", "web_search", "stream_link", "set_auto_rename", "list_filters", "list_locks",
@@ -29,9 +28,17 @@ ACTIONS = {
     "tool_capabilities",
     "show_operating_skills",
     "mangadex_search", "mangadex_feed",
+    "member_profile", "set_chat_title", "set_chat_description",
 }
 
 RISK = {"safe", "risky", "dangerous"}
+RISK_LEVEL = {"safe": 0, "risky": 1, "dangerous": 2}
+ACTION_MIN_RISK = {
+    "ban_user": "dangerous", "kick_user": "dangerous", "mute_user": "dangerous", "restrict_user": "dangerous", "delete_message": "dangerous", "purge_messages": "dangerous",
+    "set_chat_title": "dangerous", "set_chat_description": "dangerous", "forget_memory": "risky",
+}
+CONFIRM_ACTIONS = {action for action, risk in ACTION_MIN_RISK.items() if risk != "safe"} | {"download_song", "download_chapter", "register_managed_project", "provision_managed_project", "create_poll", "set_auto_rename", "track_series", "update_tracked_series"}
+TARGET_ACTIONS = {"ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "restrict_user", "unrestrict_user", "demote_user", "promote_user", "warn_user", "member_profile", "show_warnings"}
 
 
 @dataclass
@@ -48,6 +55,21 @@ class Plan:
     def public_stages(self) -> list[str]:
         """Return a user-visible process summary without revealing private reasoning."""
         return visible_stages(self.action, self.risk, self.missing, self.requires_confirmation)
+
+    def enforce_safety(self) -> "Plan":
+        """Ensure that model output cannot lower action-specific protections."""
+        minimum = ACTION_MIN_RISK.get(self.action, "safe")
+        if RISK_LEVEL.get(self.risk, 0) < RISK_LEVEL[minimum]:
+            self.risk = minimum
+        if self.action in CONFIRM_ACTIONS:
+            self.requires_confirmation = True
+        if self.action in TARGET_ACTIONS and not self.args.get("user_id"):
+            self.missing = list(dict.fromkeys([*self.missing, "Reply to the member or provide their numeric user ID"]))[:8]
+        if self.action == "set_chat_title" and not str(self.args.get("title") or "").strip():
+            self.missing = list(dict.fromkeys([*self.missing, "Provide the new group title"]))[:8]
+        if self.action == "set_chat_description" and not str(self.args.get("description") or "").strip():
+            self.missing = list(dict.fromkeys([*self.missing, "Provide the new group description"]))[:8]
+        return self
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "Plan":
@@ -66,7 +88,7 @@ class Plan:
             args=value.get("args") if isinstance(value.get("args"), dict) else {},
             missing=[str(x) for x in value.get("missing", []) if isinstance(x, str)][:8],
             confidence=max(0.0, min(1.0, float(value.get("confidence", 0.0) or 0.0))),
-        )
+        ).enforce_safety()
 
 
 class AIClient:
@@ -186,6 +208,17 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             return Plan(intent="create_poll", summary="Create a group poll", action="create_poll", risk="risky", requires_confirmation=True, args={"question": question, "options": options, "anonymous": "non-anonymous" not in low}, missing=[] if question and 2 <= len(options) <= 10 else ["Use: create poll: Question | Option 1 | Option 2"], confidence=0.85)
         if any(word in low for word in ("media info", "media information", "inspect this file", "show file details")):
             return Plan(intent="media_info", summary="Inspect media metadata", action="media_info", risk="safe", confidence=0.9)
+        if any(word in low for word in ("explain this message", "explain that message", "what does this message mean")):
+            reply_text = str(reply.get("text") or "").strip()
+            return Plan(intent="explain_message", summary="Explain the quoted message", action="explain_message", risk="safe", args={"message_text": reply_text}, missing=[] if reply_text else ["Reply to the message Lily should explain"], confidence=0.9)
+        if any(word in low for word in ("member profile", "member status", "check member", "is this user banned")):
+            return Plan(intent="member_profile", summary=f"Check member status for {target_id or 'a member'}", action="member_profile", risk="safe", args={"user_id": int(target_id) if target_id else 0}, confidence=0.9).enforce_safety()
+        if any(word in low for word in ("set group title", "change group title", "rename this group")):
+            title = re.sub(r"^.*?(?:set|change)\s+(?:the\s+)?group\s+title\s*(?:to|:)?\s*|^.*?rename\s+this\s+group\s*(?:to|:)?\s*", "", value, flags=re.I).strip()
+            return Plan(intent="set_chat_title", summary="Change the group title", action="set_chat_title", risk="dangerous", requires_confirmation=True, args={"title": title}, confidence=0.85).enforce_safety()
+        if any(word in low for word in ("set group description", "change group description")):
+            description = re.sub(r"^.*?(?:set|change)\s+(?:the\s+)?group\s+description\s*(?:to|:)?\s*", "", value, flags=re.I).strip()
+            return Plan(intent="set_chat_description", summary="Change the group description", action="set_chat_description", risk="dangerous", requires_confirmation=True, args={"description": description}, confidence=0.85).enforce_safety()
         if any(word in low for word in ("export audit", "download audit log", "export moderation history")):
             return Plan(intent="export_audit", summary="Export the group audit log", action="export_audit", risk="dangerous", requires_confirmation=True, confidence=0.9)
         if any(word in low for word in ("list managed bots", "show managed bots", "list bot projects")):
@@ -429,9 +462,9 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
         if any(word in low for word in ("create a pdf", "create a file", "make a document", "generate a report")):
             return Plan(intent="create_file", summary="Create a document from the request", action="create_file", risk="safe", args={"format": "pdf", "prompt": value}, confidence=0.8)
         if any(word in low for word in ("summarize", "summary")):
-            return Plan(intent="summarize", summary="Summarize the supplied context", action="summarize_chat", risk="safe", confidence=0.8)
+            return Plan(intent="summarize", summary="Summarize the supplied context", action="none", risk="safe", args={"prompt": value}, confidence=0.8)
         if any(word in low for word in ("remind me", "reminder")):
-            return Plan(intent="reminder", summary="Create a reminder", action="set_reminder", risk="risky", requires_confirmation=True, args={"text": value}, confidence=0.75)
+            return Plan(intent="reminder_unavailable", summary="Reminders are not enabled until Lily is attached to its persistent scheduler.", action="none", risk="safe", args={"prompt": "Explain concisely that reminders are unavailable because Lily’s persistent scheduler has not been configured; do not claim a reminder was created."}, confidence=0.95)
         if any(word in low for word in ("remember", "save this")):
             return Plan(intent="remember", summary="Save a memory", action="remember", risk="safe", args={"content": value}, confidence=0.8)
         return Plan(intent="conversation", summary="Answer the user conversationally", action="none", risk="safe", args={"prompt": value}, confidence=0.5)

@@ -175,6 +175,10 @@ Lily includes a version-controlled project-knowledge library in `lily/knowledge/
 
 For every named action, Lily can show a concise, user-visible sequence: understand the request, validate permissions and capability gates, check the relevant file/source/repository conditions, obtain confirmation when required, execute the approved action, audit the outcome, and report the result. This gives users useful progress without disclosing private model reasoning or secrets. Ask `Lily, show operating skills` to view the available protocols, or `Lily, show tool status` to see which host-gated features are currently enabled.
 
+Lily now applies a deterministic safety layer after both AI and heuristic planning. A provider cannot lower a destructive action’s risk or suppress its confirmation requirement. Member-targeting actions require an explicit numeric ID or direct reply. This hardening removes dead action routes for unconfigured reminders and fake task extraction; a normal summary request is handled as an AI response only, without claiming a separate automation job was created.
+
+The current concrete admin and assistant actions include **member profile lookup**, **group-title changes**, **group-description changes**, **quoted-message explanation**, and **scoped deletion of the requester’s latest saved memory**. Group metadata changes and memory deletion retain confirmations and audits. The member lookup is read-only but remains administrator-only to avoid turning Lily into a member-enumeration tool.
+
 ## MangaDex metadata and release feed
 
 Lily includes an **official MangaDex metadata-only** client. It is disabled by default. To enable it, set a truthful user agent and a conservative request interval; Lily caches repeated requests and never calls reader, image, MangaDex@Home, or chapter-download endpoints.

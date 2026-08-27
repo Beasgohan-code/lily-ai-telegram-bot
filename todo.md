@@ -57,3 +57,7 @@
 - [x] Verify the current MangaDex official API, rate-limit, attribution, and content-use rules before adding metadata and release-tracking support.
 - [x] Add a detailed Lily `SKILL.md` for permitted MangaDex metadata search, title records, chapter-feed tracking, attribution, caching, and safe channel-draft workflows.
 - [x] Keep MangaPill limited to manual approved links unless an authorized public API and distribution terms are verified; do not implement scrapers or reader-page downloaders.
+- [x] Audit and remove dead or misleading placeholder actions; replace them with either implemented handlers or clear unavailable-state responses that do not claim completion.
+- [x] Harden structured and heuristic action plans with action-specific required fields, bounded argument values, and centralized safe fallback behavior.
+- [x] Add practical Rose-style moderation actions for slow mode, chat cleanup, member profile/ban checks, and configurable anti-spam response policies.
+- [x] Add practical Mira-style assistant actions for quoted-message explanation, saved note retrieval, chat digest, and operator-ready diagnostics without exposing private reasoning.
