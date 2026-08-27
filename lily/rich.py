@@ -93,18 +93,33 @@ def thinking() -> dict[str, Any]:
     return {"type": "thinking"}
 
 
+def activity_status(stage: str) -> dict[str, Any]:
+    """A visible procedural status, deliberately not a model reasoning trace."""
+    return details("Lily activity", [paragraph(str(stage)[:400])], is_open=False)
+
+
 def rich_message(blocks: list[dict[str, Any]]) -> dict[str, Any]:
     return {"blocks": blocks}
 
 
-def inline_keyboard(rows: list[list[tuple[str, str]]]) -> dict[str, Any]:
-    return {"inline_keyboard": [[{"text": label, "callback_data": data} for label, data in row] for row in rows]}
+def inline_keyboard(rows: list[list[tuple[str, str] | tuple[str, str, str]]]) -> dict[str, Any]:
+    keyboard = []
+    for row in rows:
+        rendered = []
+        for entry in row:
+            label, data = entry[0], entry[1]
+            button: dict[str, Any] = {"text": label, "callback_data": data}
+            if len(entry) > 2 and settings.rich_button_styles:
+                button["style"] = entry[2]
+            rendered.append(button)
+        keyboard.append(rendered)
+    return {"inline_keyboard": keyboard}
 
 
 def confirmation_keyboard(action_id: str, include_details: bool = True) -> dict[str, Any]:
-    rows = [[("Yes, continue", f"confirm:{action_id}:yes"), ("No, cancel", f"confirm:{action_id}:no")]]
+    rows: list[list[tuple[str, str] | tuple[str, str, str]]] = [[("Yes, continue", f"confirm:{action_id}:yes", "primary"), ("No, cancel", f"confirm:{action_id}:no", "danger")]]
     if include_details:
-        rows.append([("View details", f"confirm:{action_id}:details")])
+        rows.append([("View details", f"confirm:{action_id}:details", "secondary")])
     return inline_keyboard(rows)
 
 
@@ -158,6 +173,13 @@ class RichClient:
             return True
         except Exception:
             return False
+
+    async def preview(self, chat_id: int, summary: str, stages: list[str], draft_id: int | str | None = None) -> bool:
+        """Send an optional live Rich Message draft with public task stages only."""
+        normalized_id = draft_id
+        if isinstance(draft_id, str):
+            normalized_id = int(hashlib.blake2s(draft_id.encode("utf-8"), digest_size=4).hexdigest(), 16)
+        return await self.draft(chat_id, [heading("Lily preview", 3), paragraph(summary[:800]), details("Planned stages", [list_block([str(stage)[:180] for stage in stages[:8]])]), activity_status("Waiting for confirmation or starting the approved task.")], draft_id=normalized_id, can_stop=True)
 
     def _fallback_html(self, blocks: list[dict[str, Any]]) -> str:
         parts: list[str] = []

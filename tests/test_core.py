@@ -28,6 +28,7 @@ from lily.bot_factory import BotFactoryError, EnvironmentWizard, ManagedBotFacto
 from lily.execution_workflow import visible_stages
 from lily.knowledge_library import catalog as knowledge_catalog, read_skill
 from lily.mangadex import MangaDexClient, MangaDexError
+from lily.messaging import split_for_telegram
 
 
 class LilyCoreTests(unittest.TestCase):
@@ -38,6 +39,8 @@ class LilyCoreTests(unittest.TestCase):
     def test_rich_confirmation_payload(self):
         payload = confirmation_keyboard("abc")
         self.assertEqual(payload["inline_keyboard"][0][0]["callback_data"], "confirm:abc:yes")
+        self.assertEqual(payload["inline_keyboard"][0][0].get("style"), "primary")
+        self.assertEqual(payload["inline_keyboard"][0][1].get("style"), "danger")
 
     def test_anime_announcement_has_rich_blocks_and_primary_buttons(self):
         blocks = ChannelPostService().announcement_blocks({
@@ -238,6 +241,13 @@ class LilyCoreTests(unittest.TestCase):
         self.assertEqual(explanation.args["message_text"], "Hello world")
         self.assertNotIn("summarize_chat", ACTIONS)
         self.assertNotIn("set_reminder", ACTIONS)
+
+    def test_long_delivery_splits_below_bot_api_limit_at_readable_boundaries(self):
+        text = ("One complete sentence for Lily. " * 250) + "Final part."
+        chunks = split_for_telegram(text, 3500)
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(len(chunk) <= 3500 for chunk in chunks))
+        self.assertEqual(" ".join(chunks).replace("  ", " ").strip(), text.strip())
 
     def test_complete_free_model_registry_is_present(self):
         self.assertEqual(len(CATALOG), 16)

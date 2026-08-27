@@ -192,6 +192,27 @@ LILY_MANGADEX_CACHE_SECONDS=300
 
 Use `Lily, MangaDex search for Frieren` to search title metadata, or `Lily, show MangaDex recent chapters for <MangaDex title ID>` to view a release feed. Lily attributes results to MangaDex and displays group attribution metadata when available; it does not provide a chapter reader or content-download feature. MangaPill remains manual-link-only because Lily has no verified authorized public API integration for it.
 
+## Telegram Bot API 10.3 delivery and local CLI
+
+Lily uses native Rich Messages whenever the deployed Bot API supports them and falls back gracefully for older deployments. It supports compact tables, expandable quotations, styled confirmation buttons, and optional live rich-message draft previews. The preview contains only public stages such as **validating**, **waiting for confirmation**, or **delivering**; it never exposes hidden model reasoning, system prompts, credentials, or unverified decisions. Telegram’s standard `sendMessage` text is limited to 4,096 characters after entities parsing, so Lily safely splits long answers into numbered pages below that limit rather than assuming an 8,000-character single-message allowance.[1]
+
+The `commands/` directory contains safe host-operator scripts:
+
+```bash
+./commands/check.sh                 # compile and run all tests
+./commands/cli.sh doctor            # redacted local health/config status
+./commands/cli.sh run-profiles      # fixed approved managed-bot profiles
+./commands/cli.sh preview "Lily set group title to Anime Club"  # preview only; does not execute
+./commands/run-bot.sh               # start Telegram worker locally
+./commands/run-api.sh               # start standalone FastAPI service locally
+```
+
+These scripts are intentionally for the server operator only; they do not create a generic shell tool in Telegram. The detailed current API capability protocol lives at `lily/knowledge/telegram-api/SKILL.md`.
+
+## References
+
+[1]: https://core.telegram.org/bots/api "Telegram Bot API reference"
+
 ## References
 
 - [Telegram Bot API](https://core.telegram.org/bots/api)

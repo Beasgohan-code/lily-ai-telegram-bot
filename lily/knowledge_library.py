@@ -18,6 +18,7 @@ SKILLS = {
     "series-release": "Manual title tracking, verified release updates, and rights-aware chapter-file delivery.",
     "queue": "Persistent job ownership, stages, cancellation, failure handling, recovery, and capacity limits.",
     "sources/mangadex": "Official MangaDex metadata and release-feed usage with pacing, attribution, and no reader/download retrieval.",
+    "telegram-api": "Telegram Bot API 10.3 rich delivery, safe visible progress, long-message handling, and Local Bot API deployment guidance.",
     "channels": "Rich channel drafts, publish verification, and post management.",
     "model-routing": "Private provider fallback order, health, cooldowns, and privacy tiers.",
     "bot-operations": "Approved bot projects, environment templates, and dry-run provisioning.",

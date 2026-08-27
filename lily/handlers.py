@@ -15,7 +15,7 @@ from telegram.ext import Application, CallbackQueryHandler, ContextTypes, Messag
 from .agent import Plan, ai
 from .config import settings
 from .db import db
-from .rich import blockquote, bold, code, confirmation_keyboard, custom_emoji, details, divider, heading, inline_keyboard, list_block, paragraph, preformatted, rich, table, thinking
+from .rich import activity_status, blockquote, bold, code, confirmation_keyboard, custom_emoji, details, divider, heading, inline_keyboard, list_block, paragraph, preformatted, rich, table
 from .tools import LilyTools, ToolContext, safe_filename, source_file_from_message
 from .postbot import post_service
 from .moderation import moderation
@@ -118,7 +118,7 @@ async def progress_message(update: Update, text_value: str) -> None:
     blocks = [heading("Lily is working", 3)]
     if settings.custom_emoji_id:
         blocks.append(paragraph([custom_emoji(settings.custom_emoji_id, "✦"), " Agent activity"] ))
-    blocks.extend([thinking(), paragraph(text_value)])
+    blocks.extend([activity_status("Public task status only — Lily does not show private model reasoning."), paragraph(text_value)])
     await rich.send(chat.id, blocks, reply_to=update.effective_message.message_id if update.effective_message else None)
 
 
@@ -855,15 +855,24 @@ async def handle_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: 
             plan.args["source_file"] = reply
     if plan.action == "none":
         memories = await db.recent_memories(f"chat:{update.effective_chat.id}:user:{update.effective_user.id}")
+        if settings.rich_live_previews:
+            await rich.preview(update.effective_chat.id, plan.summary or "Preparing a response", plan.public_stages())
         answer = await ai.answer(plan.args.get("prompt", plan.summary), _reply_context(update), memories, chat_settings)
         await send_long_rich(update.effective_chat.id, answer, title="Lily", reply_to=update.effective_message.message_id)
         return
     if plan.requires_confirmation or plan.risk in {"risky", "dangerous"}:
         action_id = await db.create_pending(update.effective_chat.id, update.effective_user.id, plan.action, _plan_dict(plan), settings.confirmation_ttl_seconds)
         extra = "For audio downloads, Yes confirms you have permission to download the material." if plan.action == "download_song" else "For chapter files, Yes confirms you have already declared distribution rights for the approved direct source." if plan.action == "download_chapter" else "Lily will execute this only after you approve it."
-        await rich.send(update.effective_chat.id, [heading("Confirmation required", 2), paragraph(plan.summary), table([["Action", plan.action], ["Risk", plan.risk], ["Requested by", update.effective_user.full_name]]), details("Planned stages", [list_block(plan.public_stages())]), paragraph(extra)], reply_markup=confirmation_keyboard(action_id), reply_to=update.effective_message.message_id)
+        if settings.rich_live_previews:
+            await rich.preview(update.effective_chat.id, plan.summary, plan.public_stages(), draft_id=action_id)
+        await rich.send(update.effective_chat.id, [heading("Confirmation required", 2), paragraph(plan.summary), table([["Action", plan.action], ["Risk", plan.risk], ["Requested by", update.effective_user.full_name]]), details("Planned stages", [list_block(plan.public_stages())]), activity_status("Waiting for the requester’s decision."), paragraph(extra)], reply_markup=confirmation_keyboard(action_id), reply_to=update.effective_message.message_id)
         return
-    await rich.send(update.effective_chat.id, [heading("Lily plan", 3), list_block(plan.public_stages())], reply_to=update.effective_message.message_id)
+    if settings.rich_live_previews:
+        await rich.preview(update.effective_chat.id, plan.summary, plan.public_stages())
+    blocks = [heading("Lily plan", 3), list_block(plan.public_stages())]
+    if settings.rich_visible_progress:
+        blocks.append(activity_status("Validating the approved request."))
+    await rich.send(update.effective_chat.id, blocks, reply_to=update.effective_message.message_id)
     await progress_message(update, "Checking the request and preparing the result…")
     result = await execute_plan(update, context, plan)
     await rich.send(update.effective_chat.id, [heading("Completed", 2), paragraph(result)])

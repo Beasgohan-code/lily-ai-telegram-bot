@@ -174,6 +174,16 @@ class ManagedBotFactory:
         self.settings = config
         self.env = EnvironmentWizard()
 
+    @classmethod
+    def run_profiles(cls) -> list[dict[str, str]]:
+        """Return the complete fixed run-profile catalog for local/Telegram previews."""
+        return [
+            {"profile": "python-main", "runtime": "python", "target": "relative .py file", "command": ".venv/bin/python <entrypoint.py>"},
+            {"profile": "python-module", "runtime": "python", "target": "dotted Python module", "command": ".venv/bin/python -m <module>"},
+            {"profile": "node-start", "runtime": "node", "target": "package.json start script", "command": "npm run start"},
+            {"profile": "docker-compose-up", "runtime": "docker-compose", "target": "repository Compose file", "command": "docker compose up"},
+        ]
+
     def _validate_repository(self, repository_url: str) -> str:
         parsed = urlparse(repository_url.strip())
         if parsed.scheme != "https" or parsed.netloc.lower() != "github.com" or len([part for part in parsed.path.split("/") if part]) != 2:
