@@ -720,6 +720,32 @@ class LilyCoreTests(unittest.TestCase):
         self.assertTrue(invalid_sticker.missing)
         self.assertEqual(assign_roles(checklist).primary.slug, "community-moderator")
 
+    def test_custom_command_aliases_preserve_safety_and_unambiguous_routing(self):
+        client = AIClient()
+        self.assertEqual(client.heuristic_plan("/help", {"chat_type": "private", "reply": {}}).action, "help")
+        self.assertEqual(client.heuristic_plan("/models", {"chat_type": "private", "reply": {}}).action, "model_status")
+        self.assertEqual(client.heuristic_plan("/id", {"chat_type": "group", "reply": {}}).action, "show_identifiers")
+        group_lock = client.heuristic_plan("/lockgroup", {"chat_type": "group", "reply": {}})
+        self.assertEqual(group_lock.action, "set_group_default_permissions")
+        self.assertEqual(group_lock.args["mode"], "read_only")
+        self.assertTrue(group_lock.requires_confirmation)
+        announcement = client.heuristic_plan("/announce Maintenance begins at 8 PM", {"chat_type": "group", "reply": {}})
+        self.assertEqual(announcement.action, "send_group_announcement")
+        self.assertTrue(announcement.requires_confirmation)
+        self.assertEqual(announcement.args["text"], "Maintenance begins at 8 PM")
+        checklist = client.heuristic_plan("/checklist Release | Test | Review", {"chat_type": "group", "reply": {}})
+        self.assertEqual(checklist.action, "post_checklist")
+        self.assertEqual(checklist.args["items"], ["Test", "Review"])
+        unmute = client.heuristic_plan("Lily unsilence user 123456789", {"chat_type": "group", "reply": {}})
+        self.assertEqual(unmute.action, "unmute_user")
+        self.assertTrue(unmute.requires_confirmation)
+        timed_mute = client.heuristic_plan("Lily timeout user 123456789 for 15m", {"chat_type": "group", "reply": {}})
+        self.assertEqual(timed_mute.action, "mute_user")
+        self.assertEqual(timed_mute.args["seconds"], 900)
+        unlocked = client.heuristic_plan("Lily unlock links", {"chat_type": "group", "reply": {}})
+        self.assertEqual(unlocked.action, "set_lock")
+        self.assertFalse(unlocked.args["enabled"])
+
     def test_new_group_management_executor_uses_fixed_api_methods_and_audits(self):
         class Chat:
             id = 100

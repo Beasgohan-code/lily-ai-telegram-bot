@@ -523,6 +523,12 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         ]
         await rich.send(chat_id, [heading("Lily tool capability status", 2), table(rows), paragraph("Changing a host environment variable is not enough to bypass Lily’s admin, confirmation, repository, path, or source checks.")])
         return "Displayed Lily’s enabled capability gates."
+    if action == "show_identifiers":
+        rows = [["Identifier", "Value"], ["Your user ID", str(user_id)], ["Current chat ID", str(chat_id)], ["Chat type", str(update.effective_chat.type or "unknown")]]
+        if update.effective_message and getattr(update.effective_message, "message_thread_id", None):
+            rows.append(["Forum topic ID", str(update.effective_message.message_thread_id)])
+        await rich.send(chat_id, [heading("Telegram identifiers", 2), table(rows, compact=True), paragraph("These identifiers help Lily target the current chat or a forum topic. They do not grant permissions.")], reply_to=update.effective_message.message_id if update.effective_message else None)
+        return "Displayed the current Telegram identifiers."
     if action == "show_operating_skills":
         rows = [["Skill", "Purpose"]] + [[item["name"], item["summary"]] for item in knowledge_catalog()]
         await rich.send(chat_id, [heading("Lily operating skills", 2), paragraph("These curated protocols guide named, permissioned Lily actions. They do not enable arbitrary code or shell access."), table(rows)])

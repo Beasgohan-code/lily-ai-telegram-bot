@@ -41,3 +41,7 @@ Set `LILY_ENABLE_AGENT_TEAM=true` to let Lily ask a **small selected specialist 
 ## Additional group and productivity tools
 
 The console can preview the newly added bounded group tools without execution. For example, `./commands/ubuntu-sandbox.sh plan "Lily create checklist: Release | Test | Review"` returns a confirmation-required plan; it does not send a message, clear pins, change a sticker set, or make a Telegram API request. Group announcements, checklists, all-pin cleanup, and sticker-set changes operate only through the normal Telegram administrator gate, explicit confirmation card, fixed Bot API method, and audit log.
+
+## Custom command aliases
+
+Lily’s chat-side aliases are fixed conveniences, not a console pathway. `/help`, `/usage`, `/models`, `/skills`, `/roles`, `/queue`, `/projects`, `/controls`, `/diagnostics`, `/rules`, `/locks`, `/filters`, `/admins`, and `/id` map to existing read-only Lily plans. `/announce`, `/checklist`, `/lockgroup`, `/unlockgroup`, and `/clearpins` create the same confirmation-gated plans as their natural-language equivalents. The safe Ubuntu terminal entrypoint does not interpret these aliases as shell commands; use `plan "<request>"` to preview their resulting plan.

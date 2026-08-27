@@ -78,6 +78,21 @@ Additional group-management skills now include group-wide **read-only mode** and
 
 Lily also supports a bounded **group announcement** and **checklist** publisher, global removal of pinned messages, and group sticker-set configuration. For example, say `Lily, group announcement: Maintenance starts at 8 PM` or `Lily, create checklist: Release tasks | Run tests | Review logs`. Announcements are capped at 3,000 characters; checklist titles and items are bounded; both require confirmation and are recorded in the audit log. `Lily, clear all pins`, `Lily, set group sticker set to team_stickers`, and `Lily, remove group sticker set` are dangerous administrator actions that require confirmation and call only their respective fixed Telegram API methods. Lily does not infer or download sticker packs, and it rejects invalid sticker-set short names.
 
+For fast common requests, Lily recognizes a compact custom-alias layer alongside ordinary language. These aliases map to the same central action plans; they are **not** a generic command interpreter.
+
+| Alias or shorthand | Lily action | Safety behavior |
+|---|---|---|
+| `/help`, `/start` | Show Lily help | Read-only. |
+| `/usage`, `/limits`, `/models`, `/skills`, `/roles` | Show user, model, skill, or role status | Read-only; provider secrets and internal errors remain hidden. |
+| `/queue`, `/projects`, `/controls`, `/diagnostics`, `/rules`, `/locks`, `/filters`, `/admins` | Show scoped work, group, or moderation status | Uses the existing chat and administrator boundary where applicable. |
+| `/id`, `/ids` | Show the current user/chat/topic identifiers | Read-only; identifiers grant no permission. |
+| `/announce <text>` | Prepare a group announcement | Confirmation and administrator gate required. |
+| `/checklist Title \| Item 1 \| Item 2` | Prepare a bounded group checklist | Confirmation and administrator gate required. |
+| `/lockgroup`, `/unlockgroup`, `/clearpins` | Change group defaults or remove pins | Dangerous; confirmation and administrator checks required. |
+| `Lily timeout @user for 15m`, `Lily silence this member`, `Lily unsilence this member` | Timed mute or unmute | Dangerous; Lily needs an actual reply or numeric user ID and confirmation. |
+
+Lily recognizes compact time expressions such as `15m`, `2h`, and `1d` for a mute/timeout request, clamps them to the existing maximum restriction window, and always asks for confirmation. It also recognizes `unlock links` as an unlock operation rather than turning the lock on.
+
 For streaming, reply to a Lily-managed file and ask for a direct streaming link. Lily downloads the file to managed storage, generates an expiring HMAC-signed URL, and exposes it through the optional FastAPI stream service. Set `LILY_STREAM_PUBLIC_BASE_URL` to an HTTPS reverse-proxy URL before enabling this feature. Do not expose the stream port directly to the internet or use it for files outside Lily’s managed work/download directories.
 
 For web search, Lily uses the configured search endpoint and returns rich result tables plus expandable snippets. The default is DuckDuckGo’s Instant Answer endpoint; configure an alternative compatible provider if you need broader coverage.

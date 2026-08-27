@@ -28,7 +28,7 @@ ACTIONS = {
     "tool_capabilities",
     "show_operating_skills",
     "mangadex_search", "mangadex_feed",
-    "member_profile", "set_chat_title", "set_chat_description", "set_group_default_permissions", "create_invite_link", "revoke_invite_link", "create_forum_topic", "close_forum_topic", "reopen_forum_topic", "delete_forum_topic", "list_administrators", "group_member_count", "send_group_announcement", "post_checklist", "unpin_all_messages", "set_chat_sticker_set", "delete_chat_sticker_set",
+    "member_profile", "set_chat_title", "set_chat_description", "set_group_default_permissions", "create_invite_link", "revoke_invite_link", "create_forum_topic", "close_forum_topic", "reopen_forum_topic", "delete_forum_topic", "list_administrators", "group_member_count", "send_group_announcement", "post_checklist", "unpin_all_messages", "set_chat_sticker_set", "delete_chat_sticker_set", "show_identifiers",
 }
 
 RISK = {"safe", "risky", "dangerous"}
@@ -291,6 +291,42 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
         if not target_id:
             numeric_targets = re.findall(r"(?<!\d)(-?\d{5,})(?!\d)", value)
             target_id = numeric_targets[-1] if numeric_targets else None
+        exact_aliases = {
+            "/help": ("help", "Show Lily help"), "/start": ("help", "Show Lily help"),
+            "/usage": ("usage", "Show Lily usage"), "/limits": ("usage", "Show Lily usage"),
+            "/models": ("model_status", "Show AI model health"), "/ai": ("model_status", "Show AI model health"),
+            "/skills": ("list_skills", "List enabled skills"), "/roles": ("show_agent_roles", "Show Lily’s specialist roles"),
+            "/queue": ("queue_list", "List encoding jobs"), "/projects": ("code_project_status", "Show recent code-project jobs"),
+            "/controls": ("group_controls_status", "Show group control status"), "/diagnostics": ("group_diagnostics", "Show group moderation diagnostics"),
+            "/rules": ("show_group_rules", "Show group rules"), "/locks": ("list_locks", "List group locks"),
+            "/filters": ("list_filters", "List group filters"), "/admins": ("list_administrators", "Show the current administrator roster"),
+            "/id": ("show_identifiers", "Show the current Telegram identifiers"), "/ids": ("show_identifiers", "Show the current Telegram identifiers"),
+            "/clearpins": ("unpin_all_messages", "Remove all pinned messages from this group"),
+            "/lockgroup": ("set_group_default_permissions", "Make the group read-only for regular members"),
+            "/unlockgroup": ("set_group_default_permissions", "Restore normal group member permissions"),
+        }
+        alias = exact_aliases.get(low)
+        if alias:
+            action, summary = alias
+            args = {"mode": "read_only"} if action == "set_group_default_permissions" and low == "/lockgroup" else {"mode": "normal"} if action == "set_group_default_permissions" else {}
+            risk = ACTION_MIN_RISK.get(action, "safe")
+            return Plan(intent=action, summary=summary, action=action, risk=risk, requires_confirmation=action in CONFIRM_ACTIONS, args=args, confidence=0.98).enforce_safety()
+        announcement_match = re.match(r"^/(?:announce|broadcast)\s+(.+)$", value, re.I | re.S)
+        if announcement_match:
+            return Plan(intent="send_group_announcement", summary="Post a group announcement", action="send_group_announcement", risk="risky", requires_confirmation=True, args={"text": announcement_match.group(1).strip()[:3000]}, confidence=0.95).enforce_safety()
+        checklist_match = re.match(r"^/(?:checklist|tasks)\s+(.+)$", value, re.I | re.S)
+        if checklist_match:
+            parts = [part.strip()[:180] for part in checklist_match.group(1).split("|") if part.strip()]
+            title, items = (parts[0], parts[1:]) if parts else ("", [])
+            return Plan(intent="post_checklist", summary="Post a bounded group checklist", action="post_checklist", risk="risky", requires_confirmation=True, args={"title": title[:160], "items": items[:15]}, missing=[] if title and items else ["Use: /checklist Title | Item one | Item two"], confidence=0.95).enforce_safety()
+        duration_match = re.search(r"\b(\d{1,4})\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)\b", low)
+        if duration_match:
+            amount = int(duration_match.group(1))
+            unit = duration_match.group(2)
+            multiplier = 86_400 if unit.startswith("d") else 3_600 if unit.startswith("h") else 60
+            duration_seconds = max(60, min(amount * multiplier, 2_419_200))
+        else:
+            duration_seconds = 3_600
         if any(word in low for word in ("search the web", "web search", "look this up", "search online")):
             query = re.sub(r"^(.*?)(search the web|web search|look this up|search online)[: ]*", "", value, flags=re.I).strip() or value
             return Plan(intent="web_search", summary="Search the web", action="web_search", risk="safe", args={"query": query}, confidence=0.9)
@@ -523,6 +559,10 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             if not target_id:
                 return Plan(intent="demote_user", summary="Demote a user", action="demote_user", risk="dangerous", missing=["Reply to the target user’s message or provide their numeric user ID"], confidence=0.8)
             return Plan(intent="demote_user", summary=f"Demote user {target_id}", action="demote_user", risk="dangerous", requires_confirmation=True, args={"user_id": int(target_id)}, confidence=0.85)
+        if any(word in low for word in ("unmute", "unsilence", "remove mute", "restore chat")):
+            if not target_id:
+                return Plan(intent="unmute_user", summary="Unmute a user", action="unmute_user", risk="dangerous", missing=["Reply to the member or provide their numeric user ID"], confidence=0.9)
+            return Plan(intent="unmute_user", summary=f"Unmute user {target_id}", action="unmute_user", risk="dangerous", requires_confirmation=True, args={"user_id": int(target_id)}, confidence=0.9)
         if any(word in low for word in ("unrestrict", "restore permissions", "allow this user again")):
             if not target_id:
                 return Plan(intent="unrestrict_user", summary="Restore a member’s sending permissions", action="unrestrict_user", risk="dangerous", missing=["Reply to the member or provide their numeric user ID"], confidence=0.8)
@@ -565,10 +605,10 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             if not target_id:
                 return Plan(intent="kick_user", summary="Remove a user", action="kick_user", risk="dangerous", missing=["Reply to the target user’s message or provide their numeric user ID"], confidence=0.8)
             return Plan(intent="kick_user", summary=f"Remove user {target_id}", action="kick_user", risk="dangerous", requires_confirmation=True, args={"user_id": int(target_id)}, confidence=0.8)
-        if "mute" in low or "restrict" in low:
+        if any(word in low for word in ("mute", "restrict", "silence", "timeout")):
             if not target_id:
                 return Plan(intent="mute_user", summary="Mute a user", action="mute_user", risk="dangerous", missing=["Reply to the target user’s message or provide their numeric user ID"], confidence=0.8)
-            return Plan(intent="mute_user", summary=f"Mute user {target_id}", action="mute_user", risk="dangerous", requires_confirmation=True, args={"user_id": int(target_id), "seconds": 3600}, confidence=0.8)
+            return Plan(intent="mute_user", summary=f"Mute user {target_id}", action="mute_user", risk="dangerous", requires_confirmation=True, args={"user_id": int(target_id), "seconds": duration_seconds}, confidence=0.85)
         if "delete" in low and ("message" in low or "this" in low):
             message_id = context.get("message_to_act_on") or reply.get("message_id")
             if not message_id:
@@ -607,7 +647,7 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
         lock_types = ("links", "forwards", "photos", "videos", "documents", "audio", "animations", "stickers", "polls", "contacts", "locations")
         if any(f"lock {item}" in low or f"unlock {item}" in low for item in lock_types):
             content_type = next((item for item in lock_types if item in low), "links")
-            return Plan(intent="set_lock", summary=f"Update the {content_type} lock", action="set_lock", risk="dangerous", requires_confirmation=True, args={"content_type": content_type, "enabled": not low.startswith("unlock")}, confidence=0.8)
+            return Plan(intent="set_lock", summary=f"Update the {content_type} lock", action="set_lock", risk="dangerous", requires_confirmation=True, args={"content_type": content_type, "enabled": not bool(re.search(r"\b(?:unlock|disable|turn off)\b", low))}, confidence=0.8)
         if any(word in low for word in ("add a filter", "create a filter", "when someone says")):
             return Plan(intent="add_filter", summary="Create a group message filter", action="add_filter", risk="risky", requires_confirmation=True, args={}, missing=["trigger", "action"], confidence=0.7)
         if any(word in low for word in ("save a note", "remember this as", "save this note")):
