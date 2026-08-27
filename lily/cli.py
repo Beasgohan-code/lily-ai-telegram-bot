@@ -134,7 +134,7 @@ async def run(args: argparse.Namespace) -> int:
         print(json.dumps(catalog(), ensure_ascii=False, indent=2))
         return 0
     if args.command == "roles":
-        print(json.dumps(agent_role_catalog(), ensure_ascii=False, indent=2))
+        print(json.dumps(agent_role_catalog(args.division), ensure_ascii=False, indent=2))
         return 0
     if args.command == "projects":
         print(json.dumps(await db.list_managed_projects(), ensure_ascii=False, indent=2))
@@ -205,7 +205,8 @@ def main() -> None:
     logs.add_argument("--owner", type=int, required=True, help="Registered managed-project owner ID.")
     logs.add_argument("--limit", type=int, default=50)
     sub.add_parser("skills", help="List Lily’s curated operating skills.")
-    sub.add_parser("roles", help="List Lily’s curated specialist agent roles.")
+    roles = sub.add_parser("roles", help="List Lily’s curated specialist agent roles.")
+    roles.add_argument("--division", help="Optionally filter the catalog by one division.")
     sub.add_parser("projects", help="List managed bot registry records (no secrets).")
     sub.add_parser("run-profiles", help="List approved managed-bot runtime profiles.")
     sub.add_parser("doctor", help="Print redacted deployment and capability diagnostics.")

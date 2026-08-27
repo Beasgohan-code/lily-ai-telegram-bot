@@ -24,7 +24,7 @@ from lily.sandbox import sandbox_status
 from lily.code_workspace import CodeWorkspace
 from lily.skill_engine import select_skill
 from lily.service_supervisor import ManagedServiceSupervisor, ProcessResult, SupervisorError
-from lily.agent_roles import assign_roles, catalog as agent_role_catalog
+from lily.agent_roles import assign_roles, catalog as agent_role_catalog, catalog_summary
 from lily.miniapp_bridge import MiniAppAuthError, validate_init_data
 from lily.model_router import ModelProfile, ModelRouter
 from lily.plugin_manager import plugin_manager
@@ -152,7 +152,9 @@ class LilyCoreTests(unittest.TestCase):
         self.assertTrue(cancellation.requires_confirmation)
 
     def test_role_catalog_assigns_specialists_without_bypassing_safety(self):
-        self.assertGreaterEqual(len(agent_role_catalog()), 20)
+        self.assertGreaterEqual(len(agent_role_catalog()), 200)
+        self.assertGreaterEqual(len(agent_role_catalog("engineering")), 10)
+        self.assertIn({"division": "engineering", "roles": len(agent_role_catalog("engineering"))}, catalog_summary())
         assignment = assign_roles(Plan(action="create_code_project", risk="safe"))
         self.assertEqual(assignment.primary.slug, "code-creator")
         self.assertIn("privacy-guardian", [role.slug for role in assignment.reviewers])

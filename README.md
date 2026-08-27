@@ -108,7 +108,7 @@ Lily also includes a constrained service-supervisor interface for registered man
 
 ## Curated specialist agent roles
 
-Lily now routes work through a curated specialist-role catalog spanning coordination, engineering, quality, operations, media, content, research, community, product, communication, analysis, and automation. Each request has one accountable primary role and may receive bounded reviewers such as **Safety Reviewer**, **Privacy Guardian**, or **Test Engineer**. These roles organize one central Lily workflow; they cannot grant new permissions, start hidden processes, add tools, suppress confirmations, or reveal private model reasoning. Ask **“Lily, show agent roles”** or run `./commands/ubuntu-sandbox.sh roles` to inspect the catalog.
+Lily now routes work through an independently designed catalog of **200-plus** specialist-role cards spanning coordination, engineering, design, product, quality, security, operations, research, analysis, communication, community, content, media, automation, strategy, finance, academic, geospatial, healthcare, and game development. Each request has one accountable primary role and may receive bounded reviewers such as **Safety Reviewer**, **Privacy Guardian**, or **Test Engineer**. These roles organize one central Lily workflow; they cannot grant new permissions, start hidden processes, add tools, suppress confirmations, or reveal private model reasoning. Ask **“Lily, show agent roles”** for a safe Telegram division summary, run `./commands/ubuntu-sandbox.sh roles` for the full local catalog, or use `./commands/ubuntu-sandbox.sh roles --division engineering` for a focused view.
 
 ## Recommended next advanced features
 

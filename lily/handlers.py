@@ -31,7 +31,7 @@ from .knowledge_library import catalog as knowledge_catalog
 from .mangadex import MangaDexError, mangadex
 from .code_workspace import code_workspace
 from .skill_engine import select_skill
-from .agent_roles import assign_roles, catalog as agent_role_catalog
+from .agent_roles import assign_roles, catalog as agent_role_catalog, catalog_summary
 
 
 tools = LilyTools(db)
@@ -786,9 +786,9 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         return f"Skill **{name}** was created with ID `{skill_id[:8]}`."
     if action == "show_agent_roles":
         roles = agent_role_catalog()
-        rows = [["Role", "Division", "Outcome"]]
-        rows.extend([[role["name"], role["division"], role["deliverable"]] for role in roles])
-        await rich.send(chat_id, [heading("Lily specialist roles", 2), table(rows, compact=True), paragraph("Roles coordinate a single Lily workflow through the existing approval and capability checks. They do not create unrestricted tools or independent privileged processes.")])
+        rows = [["Division", "Roles"]]
+        rows.extend([[str(item["division"]), str(item["roles"])] for item in catalog_summary()])
+        await rich.send(chat_id, [heading("Lily specialist roles", 2), paragraph(f"Lily has {len(roles)} curated specialist roles."), table(rows, compact=True), paragraph("Use the operator CLI with `roles --division <name>` for the complete catalog. Roles coordinate one Lily workflow through existing approval and capability checks; they do not create unrestricted tools or privileged processes.")])
         return f"Lily has {len(roles)} curated specialist roles."
     if action == "skill_status":
         runs = await db.list_skill_runs(chat_id, user_id, limit=10)

@@ -41,12 +41,15 @@ case "$command" in
   help|-h|--help)
     usage
     ;;
-  doctor|sandbox|status|profiles|roles)
+  doctor|sandbox|status|profiles)
     case "$command" in
       profiles) exec ./commands/cli.sh run-profiles ;;
-      roles) exec ./commands/cli.sh roles ;;
       *) exec ./commands/cli.sh "$command" ;;
     esac
+    ;;
+  roles)
+    shift
+    exec ./commands/cli.sh roles "$@"
     ;;
   plan|preview|ask|search)
     shift

@@ -68,6 +68,44 @@ _ROLES = (
     AgentRole("manga-tracker", "Series Tracker", "content", "Maintain user-approved title tracking.", "Tracked-series update"),
 )
 
+# Independent capability cards covering the practical division breadth found in
+# the reviewed role taxonomies. They are concise Lily metadata, not copied
+# prompts. None is mapped to a new executable action without a separate safety
+# review in _ACTION_ROLE.
+_ROLE_FAMILIES: dict[str, tuple[str, ...]] = {
+    "engineering": ("API Platform Specialist", "Backend Reliability Specialist", "Frontend Performance Specialist", "Mobile Experience Specialist", "Developer Tooling Specialist", "Database Reliability Specialist", "Release Automation Specialist", "Identity Access Specialist", "Integration Specialist", "Architecture Reviewer"),
+    "design": ("Design System Specialist", "Interaction Designer", "Visual Accessibility Specialist", "Brand Systems Specialist", "Content Design Specialist", "Research Synthesizer", "Prototype Reviewer", "Information Architect", "Interface Quality Reviewer", "Inclusive Design Specialist"),
+    "product": ("Discovery Specialist", "Requirements Analyst", "Roadmap Planner", "Experiment Designer", "Feedback Synthesizer", "Metrics Strategist", "User Journey Analyst", "Feature Prioritizer", "Release Planner", "Product Operations Specialist"),
+    "quality": ("Test Automation Specialist", "Regression Analyst", "API Quality Specialist", "Performance Analyst", "Evidence Reviewer", "Release Gatekeeper", "Accessibility Tester", "Data Quality Reviewer", "Reliability Analyst", "Workflow Quality Specialist"),
+    "security": ("Application Security Reviewer", "Threat Modeler", "Secrets Hygiene Reviewer", "Identity Assurance Specialist", "Privacy Controls Reviewer", "Incident Triage Specialist", "Security Logging Specialist", "Dependency Risk Reviewer", "Abuse Prevention Specialist", "Secure Configuration Reviewer"),
+    "operations": ("SRE Specialist", "Observability Specialist", "Capacity Planner", "Deployment Coordinator", "Incident Coordinator", "Change Manager", "Backup Reviewer", "Service Health Analyst", "Runbook Writer", "Operational Readiness Reviewer"),
+    "research": ("Source Verifier", "Literature Scout", "Fact Checker", "Competitive Analyst", "Trend Analyst", "Dataset Reviewer", "Search Relevance Specialist", "Citation Curator", "Knowledge Graph Planner", "Research Brief Writer"),
+    "analysis": ("Data Explorer", "Metrics Analyst", "Dashboard Planner", "Forecast Reviewer", "Experiment Analyst", "Anomaly Reviewer", "Reporting Specialist", "Data Storyteller", "Operations Analyst", "Decision Support Analyst"),
+    "communication": ("Technical Editor", "Support Writer", "Release Communicator", "Community Writer", "Policy Explainer", "Documentation Maintainer", "Translation Reviewer", "Plain Language Editor", "Knowledge Base Writer", "Stakeholder Brief Writer"),
+    "community": ("Community Health Analyst", "Rule Clarity Reviewer", "Moderator Coach", "Onboarding Specialist", "Escalation Coordinator", "Member Support Specialist", "Trust and Safety Reviewer", "Engagement Planner", "Feedback Listener", "Community Operations Specialist"),
+    "content": ("Editorial Planner", "Announcement Writer", "Metadata Curator", "Content QA Reviewer", "Series Editor", "Publication Coordinator", "Caption Writer", "Template Designer", "Archive Curator", "Content Calendar Planner"),
+    "media": ("Transcode Planner", "Media Quality Reviewer", "Asset Organizer", "Streaming Delivery Reviewer", "Captioning Planner", "Format Compatibility Specialist", "Compression Analyst", "Media Metadata Curator", "Archive Packaging Specialist", "Delivery Quality Specialist"),
+    "automation": ("Workflow Designer", "Trigger Reviewer", "Queue Analyst", "Job Lifecycle Reviewer", "Integration Planner", "Scheduler Designer", "Automation QA Specialist", "Error Recovery Planner", "Process Optimizer", "Policy Automation Reviewer"),
+    "strategy": ("Systems Strategist", "Risk Strategist", "Scenario Planner", "Operating Model Reviewer", "Opportunity Analyst", "Decision Framework Designer", "Portfolio Planner", "Market Context Analyst", "Change Strategy Specialist", "Strategic Brief Writer"),
+    "finance": ("Cost Visibility Analyst", "Budget Guardrail Reviewer", "Unit Economics Analyst", "Procurement Analyst", "Revenue Operations Analyst", "Forecast Quality Reviewer", "Spend Anomaly Reviewer", "FinOps Planner", "Pricing Researcher", "Financial Reporting Specialist"),
+    "academic": ("Research Methodologist", "Statistical Reviewer", "Historical Context Analyst", "Geography Analyst", "Anthropology Reviewer", "Narrative Analyst", "Evidence Synthesizer", "Study Planner", "Peer Review Specialist", "Academic Writing Editor"),
+    "geospatial": ("Map Data Reviewer", "Location Intelligence Analyst", "Spatial Data Planner", "Route Analysis Specialist", "Geocoding Reviewer", "GIS Workflow Specialist", "Boundary Data Analyst", "Spatial Quality Reviewer", "Field Data Planner", "Geographic Context Analyst"),
+    "healthcare": ("Health Information Reviewer", "Clinical Workflow Analyst", "Care Operations Analyst", "Medical Content Safety Reviewer", "Healthcare Privacy Reviewer", "Patient Communication Reviewer", "Health Data Quality Specialist", "Accessibility Care Reviewer", "Evidence Summary Specialist", "Safety Escalation Coordinator"),
+    "game-development": ("Game Systems Designer", "Gameplay QA Specialist", "Narrative Design Reviewer", "Game Performance Analyst", "Level Design Planner", "Player Experience Reviewer", "Asset Pipeline Planner", "Live Operations Analyst", "Game Accessibility Reviewer", "Prototype Playtester"),
+}
+
+
+def _family_roles() -> tuple[AgentRole, ...]:
+    generated: list[AgentRole] = []
+    for division, names in _ROLE_FAMILIES.items():
+        for index, name in enumerate(names, start=1):
+            slug = f"{division}-{index:02d}"
+            generated.append(AgentRole(slug, name, division, f"Provide a scoped {division} review within Lily’s safety boundary.", f"{name} recommendation"))
+    return tuple(generated)
+
+
+_ROLES = _ROLES + _family_roles()
+
 CATALOG = {role.slug: role for role in _ROLES}
 
 _ACTION_ROLE = {
@@ -85,8 +123,17 @@ _ACTION_ROLE = {
 _MODERATION_ACTIONS = {"ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "restrict_user", "unrestrict_user", "demote_user", "promote_user", "delete_message", "purge_messages", "warn_user", "add_filter", "remove_filter", "set_lock", "set_group_rules", "set_welcome", "set_goodbye", "set_verification", "configure_group_control", "configure_warning_escalation", "approve_join_request", "decline_join_request"}
 
 
-def catalog() -> list[dict[str, str]]:
-    return [{"slug": role.slug, "name": role.name, "division": role.division, "mission": role.mission, "deliverable": role.deliverable} for role in _ROLES]
+def catalog(division: str | None = None) -> list[dict[str, str]]:
+    wanted = str(division or "").strip().lower()
+    roles = [role for role in _ROLES if not wanted or role.division == wanted]
+    return [{"slug": role.slug, "name": role.name, "division": role.division, "mission": role.mission, "deliverable": role.deliverable} for role in roles]
+
+
+def catalog_summary() -> list[dict[str, object]]:
+    counts: dict[str, int] = {}
+    for role in _ROLES:
+        counts[role.division] = counts.get(role.division, 0) + 1
+    return [{"division": division, "roles": count} for division, count in sorted(counts.items())]
 
 
 def assign_roles(plan: Plan) -> RoleAssignment:
