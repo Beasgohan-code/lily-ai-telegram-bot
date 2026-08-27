@@ -67,6 +67,10 @@ class Settings:
     web_search_api_key: str = field(default_factory=lambda: os.getenv("LILY_WEB_SEARCH_API_KEY", ""))
     web_search_provider: str = field(default_factory=lambda: os.getenv("LILY_WEB_SEARCH_PROVIDER", "duckduckgo"))
     stream_signing_secret: str = field(default_factory=lambda: os.getenv("LILY_STREAM_SIGNING_SECRET", ""))
+    projects_root: Path = field(default_factory=lambda: Path(os.getenv("LILY_PROJECTS_ROOT", "projects")))
+    project_env_root: Path = field(default_factory=lambda: Path(os.getenv("LILY_PROJECT_ENV_ROOT", "project-env")))
+    allowed_project_repositories: tuple[str, ...] = field(default_factory=lambda: tuple(value.strip().lower().rstrip("/") for value in os.getenv("LILY_ALLOWED_PROJECT_REPOSITORIES", "").split(",") if value.strip()))
+    bot_factory_dry_run: bool = field(default_factory=lambda: _bool("LILY_BOT_FACTORY_DRY_RUN", True))
     image_generation_url: str = field(default_factory=lambda: os.getenv("LILY_IMAGE_GENERATION_URL", ""))
     image_generation_api_key: str = field(default_factory=lambda: os.getenv("LILY_IMAGE_GENERATION_API_KEY", ""))
     video_generation_url: str = field(default_factory=lambda: os.getenv("LILY_VIDEO_GENERATION_URL", ""))
@@ -124,6 +128,8 @@ class Settings:
         Path(self.database_url).parent.mkdir(parents=True, exist_ok=True)
         self.work_dir.mkdir(parents=True, exist_ok=True)
         self.download_dir.mkdir(parents=True, exist_ok=True)
+        self.projects_root.mkdir(parents=True, exist_ok=True)
+        self.project_env_root.mkdir(parents=True, exist_ok=True)
 
 
 settings = Settings()

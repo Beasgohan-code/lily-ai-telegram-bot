@@ -143,6 +143,9 @@ Lily, set the welcome message to Read the rules, {user}.
 Lily, enable member verification for new members.
 Lily, add a case note for report 7 saying review a repeated violation.
 Lily, create a skill: when someone says “drop the link”, ask an admin before deleting the message.
+Lily, register bot manga-bot from https://github.com/example/manga-bot with python-main entrypoint bot.py.
+Lily, show custom run command options.
+Lily, provision bot manga-bot.
 ```
 
 The user should reply directly to a target message or file when Lily needs an unambiguous target. This prevents the AI from guessing which member or file the user meant.
@@ -150,6 +153,14 @@ The user should reply directly to a target message or file when Lily needs an un
 ## Security checklist
 
 Use a separate bot token for development, set restrictive filesystem permissions on `data`, `work`, and `downloads`, configure disk quotas, keep the Bot API server private, run the process as a non-root user, and review audit logs. Do not enable direct audio downloads without an allow-list. Do not let custom skills contain arbitrary shell commands; skills are restricted to named backend actions.
+
+## Managed bot registry and environment wizard
+
+Lily includes a **managed-project foundation** for operators who want to run approved bot repositories from one controlled host. It stores the project slug, HTTPS GitHub repository, branch, runtime, fixed run profile, target entrypoint or module, isolated project root, host-only environment path, owner, status, revision, and errors in SQLite. The current supported runtime options are `python-main`, `python-module`, `node-start`, and `docker-compose-up`; Lily does not accept an arbitrary command pasted into chat.
+
+The environment wizard parses a project’s `.env.example`, recognizes likely secret names, validates common URL, integer, and boolean values, and writes a generated host-only `.env` by atomic replacement with mode `0600`. It provides only a redacted status view, so tokens and passwords never appear in audit logs or chat replies. Secret collection must occur through a private authenticated surface, not in a group chat.
+
+Set `LILY_ALLOWED_PROJECT_REPOSITORIES` to a comma-separated exact HTTPS GitHub allow-list before registering projects. `LILY_BOT_FACTORY_DRY_RUN=true` is the default and ensures that a provision request displays the exact fixed clone, install, and run plan without changing the host. Set it to `false` only after the always-on host, test bot, service supervisor, storage, and secret handling are verified. In active mode, Python projects can install from `requirements.txt` with `python -m pip install --no-input -r requirements.txt` or from `pyproject.toml`; Node and Docker Compose projects use fixed reviewed plans. Dependency installation can run third-party code, so a repository approval and confirmation remain mandatory.
 
 ## References
 

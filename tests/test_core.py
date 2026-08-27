@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import tempfile
 import unittest
 from collections import Counter
@@ -23,6 +24,7 @@ from lily.web_media import stream_links
 from lily.config import settings
 from lily.free_models import CATALOG, PRESETS
 from lily.group_controls import GROUP_CONTROLS, GROUP_CONTROL_MAP
+from lily.bot_factory import BotFactoryError, EnvironmentWizard, ManagedBotFactory
 
 
 class LilyCoreTests(unittest.TestCase):
@@ -292,6 +294,62 @@ class LilyCoreTests(unittest.TestCase):
             self.assertGreaterEqual(status["openai"]["failures"], 1)
 
         asyncio.run(run())
+
+    def test_environment_wizard_writes_redacted_mode_600_dotenv(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            example = root / ".env.example"
+            example.write_text("# Bot token\nTELEGRAM_BOT_TOKEN=\nPUBLIC_URL=https://bot.example.test\nDEBUG=false\n", encoding="utf-8")
+            wizard = EnvironmentWizard()
+            schema = wizard.parse_example(example)
+            supplied = {"TELEGRAM_BOT_TOKEN": "123:secret-value", "PUBLIC_URL": "https://bot.example.test", "DEBUG": "false"}
+            self.assertEqual([item.name for item in schema], ["TELEGRAM_BOT_TOKEN", "PUBLIC_URL", "DEBUG"])
+            self.assertTrue(schema[0].secret)
+            self.assertNotIn("secret-value", str(wizard.redacted_status(schema, supplied)))
+            destination = root / "bot.env"
+            wizard.write(destination, schema, supplied)
+            self.assertIn('TELEGRAM_BOT_TOKEN="123:secret-value"', destination.read_text(encoding="utf-8"))
+            self.assertEqual(os.stat(destination).st_mode & 0o777, 0o600)
+            with self.assertRaises(BotFactoryError):
+                wizard.render(schema, {"UNKNOWN": "value"})
+
+    def test_managed_bot_factory_validates_drafts_and_registry(self):
+        async def run():
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                configured = replace(settings, projects_root=root / "projects", project_env_root=root / "env", allowed_project_repositories=("https://github.com/example/manga-bot",), bot_factory_dry_run=True)
+                database = Database(str(root / "registry.sqlite3"))
+                await database.init()
+                factory = ManagedBotFactory(database, configured)
+                draft = factory.draft("manga-bot", "https://github.com/example/manga-bot", "python", "python-main", "bot.py")
+                plan = await factory.clone_and_install(draft)
+                self.assertTrue(plan["dry_run"])
+                self.assertEqual(plan["run"], ["python", "bot.py"])
+                record = await factory.register_draft(draft, 42)
+                self.assertEqual(record["slug"], "manga-bot")
+                await database.save_project_env_schema("manga-bot", [{"name": "TELEGRAM_BOT_TOKEN", "required": True, "secret": True, "validation": "text"}])
+                self.assertEqual((await database.get_project_env_schema("manga-bot"))[0]["name"], "TELEGRAM_BOT_TOKEN")
+                with self.assertRaises(BotFactoryError):
+                    factory.draft("../bad", "https://github.com/example/manga-bot", "python", "python-main", "bot.py")
+                with self.assertRaises(BotFactoryError):
+                    factory.draft("other-bot", "https://github.com/not-approved/bot", "python", "python-main", "bot.py")
+        asyncio.run(run())
+
+    def test_heuristic_router_understands_managed_bot_actions(self):
+        client = AIClient()
+        register = client.heuristic_plan(
+            "Lily register bot manga-bot from https://github.com/example/manga-bot with python-main entrypoint bot.py",
+            {"chat_type": "private", "reply": {}},
+        )
+        self.assertEqual(register.action, "register_managed_project")
+        self.assertEqual(register.args["slug"], "manga-bot")
+        self.assertEqual(register.args["run_profile"], "python-main")
+        self.assertEqual(register.args["run_target"], "bot.py")
+        provision = client.heuristic_plan("Lily provision bot manga-bot", {"chat_type": "private", "reply": {}})
+        self.assertEqual(provision.action, "provision_managed_project")
+        self.assertEqual(provision.args["slug"], "manga-bot")
+        options = client.heuristic_plan("Lily show custom run command options", {"chat_type": "private", "reply": {}})
+        self.assertEqual(options.action, "project_run_profiles")
 
 
 if __name__ == "__main__":

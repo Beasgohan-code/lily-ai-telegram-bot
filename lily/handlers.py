@@ -25,15 +25,18 @@ from .web_media import stream_links, web_search
 from .messaging import send_long_rich
 from .media_generation import media_generation
 from .group_controls import GROUP_CONTROL_MAP, control_summary
+from .bot_factory import BotFactoryError, ManagedBotFactory
 
 
 tools = LilyTools(db)
+bot_factory = ManagedBotFactory(db)
 
 ADMIN_ACTIONS = {
     "ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "restrict_user", "unrestrict_user", "demote_user", "promote_user", "delete_message", "purge_messages", "report_user", "pin_message", "unpin_message",
     "set_settings", "create_skill", "set_group_rules", "start_channel_post", "publish_channel_post", "delete_last_post",
     "warn_user", "add_filter", "remove_filter", "set_lock", "save_note", "list_notes", "search_posts", "show_warnings", "set_auto_rename", "stream_link",
     "configure_group_control", "group_controls_status", "group_diagnostics", "configure_warning_escalation", "media_info", "export_audit", "trusted_member", "block_domain", "list_domains", "clear_warnings", "set_admin_title", "approve_join_request", "decline_join_request", "list_reports", "resolve_report", "audit_log", "set_welcome", "set_goodbye", "set_verification", "set_group_rules", "show_group_rules", "add_case_note", "list_case_notes", "create_poll",
+    "list_managed_projects", "register_managed_project", "provision_managed_project", "project_env_schema", "project_run_profiles",
 }
 
 
@@ -421,6 +424,54 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
     if action == "audit_log":
         events = await db.recent_audit(chat_id, limit=30)
         return "\n".join(f"• {item['event']} — {json.dumps(item.get('detail', {}), ensure_ascii=False)[:160]}" for item in events)[:3500] or "No Lily audit events are recorded yet."
+    if action == "project_run_profiles":
+        return "Choose a fixed run profile: `python-main` (entrypoint such as bot.py), `python-module` (module such as manga_bot.main), `node-start` (npm run start), or `docker-compose-up` (docker compose up). Lily does not accept arbitrary chat-supplied shell commands."
+    if action == "list_managed_projects":
+        projects = await db.list_managed_projects(user_id)
+        if not projects:
+            return "No managed bot projects are registered for you yet."
+        return "\n".join(f"• `{item['slug']}` — {item['runtime']}/{item['run_profile']} — {item['state']} — {item['repository_url']}" for item in projects)[:3500]
+    if action == "register_managed_project":
+        try:
+            draft = bot_factory.draft(
+                str(plan.args.get("slug") or ""), str(plan.args.get("repository_url") or ""), str(plan.args.get("runtime") or "python"),
+                str(plan.args.get("run_profile") or "python-main"), str(plan.args.get("run_target") or "bot.py"), str(plan.args.get("branch") or "main"),
+            )
+            await bot_factory.register_draft(draft, user_id)
+        except BotFactoryError as exc:
+            return f"Project was not registered: {exc}"
+        return f"Registered `{draft.slug}` as a {draft.runtime} project. Next, ask Lily to provision `{draft.slug}`. The current host remains in dry-run mode until LILY_BOT_FACTORY_DRY_RUN is explicitly disabled."
+    if action == "project_env_schema":
+        slug = str(plan.args.get("slug") or "")
+        project = await db.get_managed_project(slug)
+        if not project or int(project["owner_id"]) != user_id:
+            return "That managed project was not found for your account."
+        schema = await db.get_project_env_schema(slug)
+        if not schema:
+            return "No .env.example schema has been captured yet. Provision the project in dry-run/approved mode first; Lily never asks for secrets in a group chat."
+        rows = [["Variable", "Required", "Secret", "Status"]]
+        rows.extend([[item["name"], "yes" if item["required"] else "no", "yes" if item["secret"] else "no", item["validation"]] for item in schema])
+        await rich.send(chat_id, [heading(f"Environment schema: {slug}", 2), table(rows)])
+        return f"Displayed {len(schema)} environment variable(s) without revealing values."
+    if action == "provision_managed_project":
+        slug = str(plan.args.get("slug") or "")
+        project = await db.get_managed_project(slug)
+        if not project or int(project["owner_id"]) != user_id:
+            return "That managed project was not found for your account."
+        try:
+            draft = bot_factory.draft(project["slug"], project["repository_url"], project["runtime"], project["run_profile"], project.get("run_target") or ("bot.py" if project["run_profile"] == "python-main" else ""), project["branch"])
+            result = await bot_factory.clone_and_install(draft)
+            await db.update_managed_project(slug, {"state": "dry-run" if result["dry_run"] else "provisioned"})
+            await db.audit(chat_id, user_id, "managed_project_provision", {"slug": slug, "dry_run": bool(result["dry_run"]), "runtime": project["runtime"]})
+        except BotFactoryError as exc:
+            return f"Provisioning stopped safely: {exc}"
+        if result["dry_run"]:
+            return f"Dry-run for `{slug}` is ready. Lily would clone the approved repository, then run the approved install plan and `{ ' '.join(result['run']) }`. No files, dependencies, or services were changed."
+        example = draft.project_root / ".env.example"
+        if example.exists():
+            schema = bot_factory.env.parse_example(example)
+            await db.save_project_env_schema(slug, [asdict(item) for item in schema])
+        return f"Provisioned `{slug}` and installed dependencies. The project is not started automatically; create and review its service configuration before any start action."
     if action == "export_audit":
         events = await db.recent_audit(chat_id, limit=500)
         output = settings.work_dir / f"lily_audit_{chat_id}_{int(datetime.now(timezone.utc).timestamp())}.csv"

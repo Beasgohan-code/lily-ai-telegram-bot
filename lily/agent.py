@@ -21,6 +21,7 @@ ACTIONS = {
     "add_filter", "remove_filter", "set_lock", "save_note", "list_notes", "search_posts", "show_warnings",
     "plugin_reply", "model_status", "queue_status", "queue_list", "cancel_queue_job", "web_search", "stream_link", "set_auto_rename", "list_filters", "list_locks",
     "configure_group_control", "group_controls_status", "group_diagnostics", "configure_warning_escalation", "media_info", "export_audit", "trusted_member", "block_domain", "list_domains", "clear_warnings", "set_admin_title", "approve_join_request", "decline_join_request", "list_reports", "resolve_report", "audit_log", "add_case_note", "list_case_notes",
+    "list_managed_projects", "register_managed_project", "provision_managed_project", "project_env_schema", "project_run_profiles",
 }
 
 RISK = {"safe", "risky", "dangerous"}
@@ -175,6 +176,28 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             return Plan(intent="media_info", summary="Inspect media metadata", action="media_info", risk="safe", confidence=0.9)
         if any(word in low for word in ("export audit", "download audit log", "export moderation history")):
             return Plan(intent="export_audit", summary="Export the group audit log", action="export_audit", risk="dangerous", requires_confirmation=True, confidence=0.9)
+        if any(word in low for word in ("list managed bots", "show managed bots", "list bot projects")):
+            return Plan(intent="list_managed_projects", summary="List registered bot projects", action="list_managed_projects", risk="safe", confidence=0.9)
+        if any(word in low for word in ("run profile options", "bot run options", "custom run command options")):
+            return Plan(intent="project_run_profiles", summary="Show supported bot runtime options", action="project_run_profiles", risk="safe", confidence=0.9)
+        if any(word in low for word in ("project env variables", "bot environment variables", "show bot env")):
+            slug_match = re.search(r"(?:for|of|project)\s+([a-z][a-z0-9-]{1,62})", low)
+            slug = slug_match.group(1) if slug_match else ""
+            return Plan(intent="project_env_schema", summary="Show a managed bot environment schema", action="project_env_schema", risk="safe", args={"slug": slug}, missing=[] if slug else ["Provide the registered project name"], confidence=0.85)
+        if any(word in low for word in ("register bot", "register project", "create bot project")):
+            url = next(iter(re.findall(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value)), "")
+            slug_match = re.search(r"(?:register|create)\s+(?:a\s+)?(?:bot\s+)?(?:project\s+)?([a-z][a-z0-9-]{1,62})", low)
+            slug = slug_match.group(1) if slug_match else ""
+            runtime = "docker-compose" if "docker" in low else "node" if "node" in low else "python"
+            profile = "docker-compose-up" if runtime == "docker-compose" else "node-start" if runtime == "node" else "python-module" if "python-module" in low else "python-main"
+            target_match = re.search(r"(?:entrypoint|run target|module)\s*[:=]?\s*([A-Za-z0-9_./-]+)", value, re.I)
+            target = target_match.group(1) if target_match else ("bot.py" if profile == "python-main" else "")
+            missing = [] if slug and url else ["Use: register bot <name> from https://github.com/owner/repository"]
+            return Plan(intent="register_managed_project", summary=f"Register managed bot project {slug or 'draft'}", action="register_managed_project", risk="risky", requires_confirmation=True, args={"slug": slug, "repository_url": url, "branch": "main", "runtime": runtime, "run_profile": profile, "run_target": target}, missing=missing, confidence=0.8)
+        if any(word in low for word in ("provision bot", "install bot project", "clone bot project")):
+            slug_match = re.search(r"(?:provision|install|clone)\s+(?:the\s+)?(?:bot\s+)?(?:project\s+)?([a-z][a-z0-9-]{1,62})", low)
+            slug = slug_match.group(1) if slug_match else ""
+            return Plan(intent="provision_managed_project", summary=f"Provision managed bot {slug or 'project'}", action="provision_managed_project", risk="dangerous", requires_confirmation=True, args={"slug": slug}, missing=[] if slug else ["Provide the registered project name"], confidence=0.85)
         if any(word in low for word in ("stream this", "make a streaming link", "direct link for this file")):
             return Plan(intent="stream_link", summary="Create an expiring streaming link", action="stream_link", risk="risky", requires_confirmation=True, confidence=0.9)
         if any(word in low for word in ("auto rename", "automatically rename", "rename uploads")):

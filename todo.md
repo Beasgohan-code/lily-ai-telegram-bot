@@ -29,3 +29,13 @@
 - [ ] Run staged deployment validation with a test bot, group, channel, Mini App URL, provider health check, and large-file workflow before public rollout.
 - [ ] Add production deployment artifacts for a containerized Lily stack and a systemd-managed non-container option, including private ports, persistent volumes, and health checks.
 - [x] Add operational tools for admin export, controlled group cleanup, and retained moderation-case visibility without bypassing Lily permissions or confirmation gates.
+- [x] Define a secure managed-bot registry with approved repositories, project names, owners, runtime commands, and isolated project directories.
+- [ ] Add confirmation-gated bot project provisioning from a GitHub URL, including clone, dependency installation plan, generated `.env.example`, and secret prompts without storing tokens in chat or Git.
+- [ ] Add lifecycle controls for approved projects: status, start, stop, restart, update, and rollback, using a supervisor rather than arbitrary shell commands.
+- [ ] Add bounded recent-log retrieval with redaction, pagination, severity filters, and audit records for every lifecycle operation.
+- [x] Add host/deployment health diagnostics and a staged “dry run” mode before Lily controls real bot processes.
+- [x] Document advanced bot-factory features, hosting prerequisites, environment-variable contract, and security limitations.
+- [x] Implement a validated managed-project model with fixed project roots, supported runtime choices, states, owners, and repository allow-list metadata.
+- [x] Implement an environment-schema parser and secure `.env` renderer with value validation, redacted status, atomic writes, and mode 0600.
+- [x] Implement dependency-install planning that permits only requirements.txt, pyproject.toml, package.json, or a reviewed custom command selected from a supported allow-list.
+- [x] Add dry-run project provisioning plans and confirmation-gated registry actions before any clone, install, environment write, or service creation.

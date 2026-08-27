@@ -219,8 +219,38 @@ class Database:
                     created_at INTEGER NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_stream_links_expires_at ON stream_links(expires_at);
+                CREATE TABLE IF NOT EXISTS managed_projects (
+                    slug TEXT PRIMARY KEY,
+                    repository_url TEXT NOT NULL,
+                    branch TEXT NOT NULL DEFAULT 'main',
+                    runtime TEXT NOT NULL,
+                    run_profile TEXT NOT NULL,
+                    run_target TEXT NOT NULL DEFAULT '',
+                    project_root TEXT NOT NULL,
+                    env_path TEXT NOT NULL,
+                    owner_id INTEGER NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'registered',
+                    revision TEXT NOT NULL DEFAULT '',
+                    last_error TEXT NOT NULL DEFAULT '',
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS managed_project_env (
+                    project_slug TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    required INTEGER NOT NULL DEFAULT 0,
+                    secret INTEGER NOT NULL DEFAULT 1,
+                    default_value TEXT NOT NULL DEFAULT '',
+                    description TEXT NOT NULL DEFAULT '',
+                    validation TEXT NOT NULL DEFAULT 'text',
+                    PRIMARY KEY(project_slug, name),
+                    FOREIGN KEY(project_slug) REFERENCES managed_projects(slug) ON DELETE CASCADE
+                );
                 """
             )
+            columns = {str(row["name"]) for row in await (await db.execute("PRAGMA table_info(managed_projects)")).fetchall()}
+            if "run_target" not in columns:
+                await db.execute("ALTER TABLE managed_projects ADD COLUMN run_target TEXT NOT NULL DEFAULT ''")
             await db.commit()
 
     async def get_chat_settings(self, chat_id: int, title: str = "") -> dict[str, Any]:
@@ -659,6 +689,62 @@ class Database:
                 (chat_id, actor_id, event, json.dumps(detail), int(time.time())),
             )
             await db.commit()
+
+    async def register_managed_project(self, project: dict[str, Any]) -> dict[str, Any]:
+        now = int(time.time())
+        fields = ("slug", "repository_url", "branch", "runtime", "run_profile", "run_target", "project_root", "env_path", "owner_id", "state", "revision", "last_error")
+        values = {field: project.get(field, "") for field in fields}
+        values["branch"] = values["branch"] or "main"
+        values["state"] = values["state"] or "registered"
+        async with self.connect() as db:
+            await db.execute(
+                """INSERT INTO managed_projects(slug,repository_url,branch,runtime,run_profile,run_target,project_root,env_path,owner_id,state,revision,last_error,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(slug) DO UPDATE SET repository_url=excluded.repository_url,branch=excluded.branch,runtime=excluded.runtime,run_profile=excluded.run_profile,run_target=excluded.run_target,project_root=excluded.project_root,env_path=excluded.env_path,owner_id=excluded.owner_id,updated_at=excluded.updated_at""",
+                tuple(values[field] for field in fields) + (now, now),
+            )
+            await db.commit()
+        return await self.get_managed_project(str(values["slug"])) or {}
+
+    async def get_managed_project(self, slug: str) -> dict[str, Any] | None:
+        async with self.connect() as db:
+            row = await (await db.execute("SELECT * FROM managed_projects WHERE slug=?", (slug,))).fetchone()
+            return dict(row) if row else None
+
+    async def list_managed_projects(self, owner_id: int | None = None) -> list[dict[str, Any]]:
+        async with self.connect() as db:
+            if owner_id is None:
+                rows = await (await db.execute("SELECT * FROM managed_projects ORDER BY updated_at DESC, slug")).fetchall()
+            else:
+                rows = await (await db.execute("SELECT * FROM managed_projects WHERE owner_id=? ORDER BY updated_at DESC, slug", (owner_id,))).fetchall()
+            return [dict(row) for row in rows]
+
+    async def update_managed_project(self, slug: str, patch: dict[str, Any]) -> dict[str, Any] | None:
+        allowed = {"branch", "runtime", "run_profile", "state", "revision", "last_error"}
+        values = {key: value for key, value in patch.items() if key in allowed}
+        if not values:
+            return await self.get_managed_project(slug)
+        values["updated_at"] = int(time.time())
+        assignments = ", ".join(f"{key}=?" for key in values)
+        async with self.connect() as db:
+            await db.execute(f"UPDATE managed_projects SET {assignments} WHERE slug=?", tuple(values.values()) + (slug,))
+            await db.commit()
+        return await self.get_managed_project(slug)
+
+    async def save_project_env_schema(self, slug: str, schema: list[dict[str, Any]]) -> None:
+        async with self.connect() as db:
+            await db.execute("DELETE FROM managed_project_env WHERE project_slug=?", (slug,))
+            for item in schema:
+                await db.execute(
+                    "INSERT INTO managed_project_env(project_slug,name,required,secret,default_value,description,validation) VALUES(?,?,?,?,?,?,?)",
+                    (slug, item["name"], int(bool(item.get("required"))), int(bool(item.get("secret", True))), str(item.get("default", "")), str(item.get("description", "")), str(item.get("validation", "text"))),
+                )
+            await db.commit()
+
+    async def get_project_env_schema(self, slug: str) -> list[dict[str, Any]]:
+        async with self.connect() as db:
+            rows = await (await db.execute("SELECT * FROM managed_project_env WHERE project_slug=? ORDER BY name", (slug,))).fetchall()
+            return [dict(row) for row in rows]
 
 
 db = Database(settings.database_url)
