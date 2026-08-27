@@ -30,6 +30,7 @@ from .bot_factory import BotFactoryError, ManagedBotFactory
 from .knowledge_library import catalog as knowledge_catalog
 from .mangadex import MangaDexError, mangadex
 from .code_workspace import code_workspace
+from .skill_engine import select_skill
 
 
 tools = LilyTools(db)
@@ -52,6 +53,26 @@ ADMIN_ACTIONS = {
 
 def _plan_dict(plan: Plan) -> dict[str, Any]:
     return asdict(plan)
+
+
+def _public_plan_dict(plan: dict[str, Any]) -> dict[str, Any]:
+    """Remove internal run/source markers before showing confirmation details."""
+    args = plan.get("args") if isinstance(plan.get("args"), dict) else {}
+    return {
+        "intent": str(plan.get("intent") or "")[:200],
+        "summary": str(plan.get("summary") or "")[:1000],
+        "action": str(plan.get("action") or "")[:80],
+        "risk": str(plan.get("risk") or "safe")[:20],
+        "requires_confirmation": bool(plan.get("requires_confirmation")),
+        "missing": [str(value)[:200] for value in plan.get("missing", []) if isinstance(value, str)][:8],
+        "args": {str(key): value for key, value in args.items() if not str(key).startswith("_") and str(key) not in {"source_file"}},
+    }
+
+
+async def _finish_skill_plan(plan: Plan, state: str, detail: str) -> None:
+    run_id = str(plan.args.get("_skill_run_id") or "")
+    if run_id:
+        await db.finish_skill_run(run_id, state, detail)
 
 
 def _reply_context(update: Update) -> dict[str, Any]:
@@ -167,7 +188,7 @@ async def list_skills_message(update: Update) -> None:
         return
     rows = [["Skill", "Trigger", "Action"]]
     for skill in skills:
-        rows.append([skill["name"], json.dumps(skill["trigger"], ensure_ascii=False)[:80], json.dumps(skill["action"], ensure_ascii=False)[:100]])
+        rows.append([f"{skill['name']} ({skill.get('execution_mode', 'suggest')})", json.dumps(skill["trigger"], ensure_ascii=False)[:80], json.dumps(skill["action"], ensure_ascii=False)[:100]])
     await rich.send(update.effective_chat.id, [heading("Custom skills", 2), table(rows)])
 
 
@@ -176,17 +197,18 @@ async def skill_trigger(update: Update) -> Plan | None:
     text_value = (message.text or message.caption or "").lower() if message else ""
     if not text_value:
         return None
-    for skill in await db.list_skills(update.effective_chat.id):
-        trigger = skill["trigger"]
-        keywords = trigger.get("keywords", []) if isinstance(trigger, dict) else []
-        contains = trigger.get("contains", []) if isinstance(trigger, dict) else []
-        matched = any(str(keyword).lower() in text_value for keyword in keywords + contains)
-        if not matched:
-            continue
-        action = skill["action"] if isinstance(skill["action"], dict) else {}
-        action_name = action.get("action") or action.get("type") or "none"
-        args = action.get("args") if isinstance(action.get("args"), dict) else action
-        return Plan(intent=skill["name"], summary=f"Run skill: {skill['name']}", action=action_name, risk="dangerous" if skill["confirmation"] != "never" else "safe", requires_confirmation=skill["confirmation"] != "never", args=args)
+    skills = await db.list_skills(update.effective_chat.id)
+    match = select_skill(skills, text_value)
+    if not match or match.state == "cooldown" or not match.plan:
+        return None
+    skill = next((item for item in skills if str(item["id"]) == match.skill_id), None)
+    if not skill or not await db.claim_skill_run(match.skill_id, int(skill.get("cooldown_seconds", 0) or 0)):
+        return None
+    state = "running" if match.state == "automatic" else "awaiting_confirmation"
+    run_id = await db.create_skill_run(match.skill_id, update.effective_chat.id, update.effective_user.id, match.action, state, match.name)
+    match.plan.args["_skill_run_id"] = run_id
+    match.plan.args["_skill_id"] = match.skill_id
+    return match.plan
     return None
 
 
@@ -759,8 +781,13 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         if not isinstance(trigger, dict) or not isinstance(skill_action, dict):
             return "Describe the skill in this form: when certain words or conditions appear, what should Lily do, and should Lily ask before risky actions?"
         name = str(plan.args.get("name") or plan.args.get("skill_name") or "Custom Lily skill")[:80]
-        skill_id = await db.save_skill(chat_id, user_id, name, trigger, skill_action, str(plan.args.get("confirmation", "risky")))
+        skill_id = await db.save_skill(chat_id, user_id, name, trigger, skill_action, str(plan.args.get("confirmation", "risky")), int(plan.args.get("cooldown_seconds", 0) or 0), int(plan.args.get("priority", 100) or 100), str(plan.args.get("execution_mode", "suggest")))
         return f"Skill **{name}** was created with ID `{skill_id[:8]}`."
+    if action == "skill_status":
+        runs = await db.list_skill_runs(chat_id, user_id, limit=10)
+        if not runs:
+            return "No automatic skill runs have been recorded for you in this chat yet."
+        return "\n".join(f"• `{item['action']}` — {item['state']} — {item['detail']}" for item in runs)[:3500]
     if action == "publish_channel_post":
         channel_id = plan.args.get("channel_id")
         if not channel_id:
@@ -843,6 +870,7 @@ async def handle_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: 
         plan.args["user_id"] = int(reply_target)
     plan.enforce_safety()
     if plan.missing:
+        await _finish_skill_plan(plan, "needs_details", "Lily needs additional details")
         await rich.send(update.effective_chat.id, [heading("I need one more detail", 3), paragraph(plan.summary), list_block(plan.missing)])
         return
     if plan.action == "help":
@@ -862,6 +890,7 @@ async def handle_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: 
         await rich.send(update.effective_chat.id, [heading("Which channel?", 2), paragraph("Send the channel ID or @username. Lily will verify that you are an admin and that Lily can delete messages there before asking for confirmation.")])
         return
     if plan.action in ADMIN_ACTIONS and not await is_admin(update):
+        await _finish_skill_plan(plan, "denied", "Current user is not permitted to run this skill")
         await send_error(update, "Only a Telegram group admin or owner can use that action.")
         return
     if plan.action in {"rename_file", "compress_file", "encode_media", "stream_link"} and plan.args.get("source_file") is None:
@@ -889,7 +918,12 @@ async def handle_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: 
         blocks.append(activity_status("Validating the approved request."))
     await rich.send(update.effective_chat.id, blocks, reply_to=update.effective_message.message_id)
     await progress_message(update, "Checking the request and preparing the result…")
-    result = await execute_plan(update, context, plan)
+    try:
+        result = await execute_plan(update, context, plan)
+    except Exception:
+        await _finish_skill_plan(plan, "failed", "Lily could not complete the approved skill action")
+        raise
+    await _finish_skill_plan(plan, "completed", "Completed")
     await rich.send(update.effective_chat.id, [heading("Completed", 2), paragraph(result)])
 
 
@@ -1048,10 +1082,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await query.edit_message_text("This Lily confirmation expired.")
         return
     if choice == "details":
-        await query.message.reply_text(json.dumps(pending["plan"], indent=2, ensure_ascii=False)[:3900])
+        await query.message.reply_text(json.dumps(_public_plan_dict(pending["plan"]), indent=2, ensure_ascii=False)[:3900])
         return
     if choice == "no":
         await db.finish_pending(action_id, "cancelled")
+        await _finish_skill_plan(Plan.from_dict(pending["plan"]), "cancelled", "Requester declined")
         await query.edit_message_text("Cancelled. No action was taken.")
         return
     if choice != "yes" or not await is_admin(update):
@@ -1061,6 +1096,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await query.edit_message_text("This action was already handled.")
         return
     plan = Plan.from_dict(pending["plan"])
+    await _finish_skill_plan(plan, "approved", "Requester approved")
     if plan.action == "download_song":
         plan.args["rights_confirmed"] = True
     await query.edit_message_reply_markup(reply_markup=None)

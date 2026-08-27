@@ -38,6 +38,13 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 }
 
 
+def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
+    try:
+        return max(minimum, min(int(value), maximum))
+    except (TypeError, ValueError):
+        return default
+
+
 class Database:
     def __init__(self, path: str):
         self.path = path
@@ -94,10 +101,24 @@ class Database:
                     enabled INTEGER NOT NULL DEFAULT 1,
                     cooldown_seconds INTEGER NOT NULL DEFAULT 0,
                     last_run_at INTEGER,
+                    priority INTEGER NOT NULL DEFAULT 100,
+                    execution_mode TEXT NOT NULL DEFAULT 'suggest',
                     created_by INTEGER NOT NULL,
                     created_at INTEGER NOT NULL,
                     UNIQUE(chat_id, name)
                 );
+                CREATE TABLE IF NOT EXISTS skill_runs (
+                    id TEXT PRIMARY KEY,
+                    skill_id TEXT NOT NULL,
+                    chat_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    action TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    detail TEXT NOT NULL DEFAULT '',
+                    created_at INTEGER NOT NULL,
+                    finished_at INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_skill_runs_chat_user_created ON skill_runs(chat_id, user_id, created_at DESC);
                 CREATE TABLE IF NOT EXISTS memories (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     scope_key TEXT NOT NULL,
@@ -266,6 +287,11 @@ class Database:
             columns = {str(row["name"]) for row in await (await db.execute("PRAGMA table_info(managed_projects)")).fetchall()}
             if "run_target" not in columns:
                 await db.execute("ALTER TABLE managed_projects ADD COLUMN run_target TEXT NOT NULL DEFAULT ''")
+            skill_columns = {str(row["name"]) for row in await (await db.execute("PRAGMA table_info(skills)")).fetchall()}
+            if "priority" not in skill_columns:
+                await db.execute("ALTER TABLE skills ADD COLUMN priority INTEGER NOT NULL DEFAULT 100")
+            if "execution_mode" not in skill_columns:
+                await db.execute("ALTER TABLE skills ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'suggest'")
             await db.commit()
 
     async def get_chat_settings(self, chat_id: int, title: str = "") -> dict[str, Any]:
@@ -549,19 +575,21 @@ class Database:
             await db.commit()
             return cursor.rowcount == 1
 
-    async def save_skill(self, chat_id: int, created_by: int, name: str, trigger: dict[str, Any], action: dict[str, Any], confirmation: str = "risky", cooldown_seconds: int = 0) -> str:
+    async def save_skill(self, chat_id: int, created_by: int, name: str, trigger: dict[str, Any], action: dict[str, Any], confirmation: str = "risky", cooldown_seconds: int = 0, priority: int = 100, execution_mode: str = "suggest") -> str:
         skill_id = uuid.uuid4().hex
+        confirmation = confirmation if confirmation in {"never", "risky", "always"} else "risky"
+        execution_mode = execution_mode if execution_mode in {"auto", "suggest"} else "suggest"
         async with self.connect() as db:
             await db.execute(
-                "INSERT INTO skills(id,chat_id,name,trigger_json,action_json,confirmation,cooldown_seconds,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                (skill_id, chat_id, name, json.dumps(trigger), json.dumps(action), confirmation, cooldown_seconds, created_by, int(time.time())),
+                "INSERT INTO skills(id,chat_id,name,trigger_json,action_json,confirmation,cooldown_seconds,priority,execution_mode,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (skill_id, chat_id, name[:80], json.dumps(trigger), json.dumps(action), confirmation, _bounded_int(cooldown_seconds, 0, 0, 86_400), _bounded_int(priority, 100, 0, 1000), execution_mode, created_by, int(time.time())),
             )
             await db.commit()
         return skill_id
 
     async def list_skills(self, chat_id: int) -> list[dict[str, Any]]:
         async with self.connect() as db:
-            rows = await (await db.execute("SELECT * FROM skills WHERE chat_id=? ORDER BY created_at", (chat_id,))).fetchall()
+            rows = await (await db.execute("SELECT * FROM skills WHERE chat_id=? ORDER BY enabled DESC, priority DESC, created_at", (chat_id,))).fetchall()
             result = []
             for row in rows:
                 item = dict(row)
@@ -569,6 +597,45 @@ class Database:
                 item["action"] = json.loads(item.pop("action_json"))
                 result.append(item)
             return result
+
+    async def claim_skill_run(self, skill_id: str, cooldown_seconds: int, now: int | None = None) -> bool:
+        """Atomically reserve a trigger slot so a cooldown cannot be bypassed by duplicate updates."""
+        timestamp = int(time.time()) if now is None else int(now)
+        cooldown = _bounded_int(cooldown_seconds, 0, 0, 86_400)
+        async with self.connect() as db:
+            cursor = await db.execute(
+                "UPDATE skills SET last_run_at=? WHERE id=? AND enabled=1 AND (last_run_at IS NULL OR last_run_at + ? <= ?)",
+                (timestamp, skill_id, cooldown, timestamp),
+            )
+            await db.commit()
+            return cursor.rowcount == 1
+
+    async def create_skill_run(self, skill_id: str, chat_id: int, user_id: int, action: str, state: str, detail: str = "") -> str:
+        run_id = uuid.uuid4().hex
+        async with self.connect() as db:
+            await db.execute(
+                "INSERT INTO skill_runs(id,skill_id,chat_id,user_id,action,state,detail,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                (run_id, skill_id, chat_id, user_id, action[:80], state[:32], detail[:500], int(time.time())),
+            )
+            await db.commit()
+        return run_id
+
+    async def finish_skill_run(self, run_id: str, state: str, detail: str = "") -> None:
+        async with self.connect() as db:
+            await db.execute(
+                "UPDATE skill_runs SET state=?, detail=?, finished_at=? WHERE id=?",
+                (state[:32], detail[:500], int(time.time()), run_id),
+            )
+            await db.commit()
+
+    async def list_skill_runs(self, chat_id: int, user_id: int | None = None, limit: int = 20) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit), 100))
+        async with self.connect() as db:
+            if user_id is None:
+                rows = await (await db.execute("SELECT * FROM skill_runs WHERE chat_id=? ORDER BY created_at DESC LIMIT ?", (chat_id, limit))).fetchall()
+            else:
+                rows = await (await db.execute("SELECT * FROM skill_runs WHERE chat_id=? AND user_id=? ORDER BY created_at DESC LIMIT ?", (chat_id, user_id, limit))).fetchall()
+            return [dict(row) for row in rows]
 
     async def add_warning(self, chat_id: int, user_id: int, reason: str) -> int:
         async with self.connect() as db:

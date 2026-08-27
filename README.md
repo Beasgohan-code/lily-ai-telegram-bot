@@ -88,7 +88,7 @@ python3 -m lily.cli plan "Lily, demote user 12345"
 python3 -m lily.cli ask "Draft a calm moderation message about spam links"
 ```
 
-The CLI uses Lily’s configured multi-model fallback router and prints either model health, a strict action plan, or a conversational answer. It does not bypass Telegram permissions; use it for review, debugging, and offline drafting.
+The CLI uses Lily’s configured multi-model fallback router and prints either model health, a strict action plan, or a conversational answer. It does not bypass Telegram permissions; use it for review, debugging, and offline drafting. The Ubuntu console includes `skill-match <chat_id> <user_id> <text>` to preview whether a custom automatic skill or the LLM planner would handle a request, and `skill-runs <chat_id> --user-id <id>` to list redacted outcomes. Neither command executes a Telegram action.
 
 ## Telegram Mini App
 
@@ -108,6 +108,12 @@ The optional `lily-miniapp/` project is a polished Telegram Web App dashboard fo
 ## Custom skill plugins
 
 Trusted local plugins live in the `plugins/` directory. Each plugin defines a `PLUGIN` manifest with a name, version, description, trigger list, an allow-listed Lily action, risk level, and optional `build_plan(context)` function. A plugin receives text and IDs, not a Telegram Bot object, so all Telegram operations still pass through Lily’s permission and confirmation layer. The included `plugins/hello_skill.py` is a safe example. Do not load untrusted plugin files; Python plugins can execute arbitrary code by design.
+
+## Automatic custom skills
+
+Database-backed custom skills can react to message keywords or explicitly supplied regular expressions. Each skill has an enabled state, priority, bounded cooldown, and execution mode. The default **suggest** mode displays a confirmation-required plan. Only the fixed safe reply action (`plugin_reply`) may use **auto** mode with `confirmation: never`. Moderation, media, downloads, code workspaces, group configuration, and channel publishing remain approval-gated even if a skill is accidentally configured for automatic operation.
+
+Lily records a compact lifecycle record for every selected automatic skill: awaiting confirmation, approved, completed, cancelled, denied, failed, or needs-details. It stores public action names and short status labels only—not model reasoning, source-file metadata, environment values, or raw command strings. Ask `Lily, skill status` to see recent automatic-skill activity in the current chat.
 
 ## Channel Post Studio
 

@@ -18,6 +18,7 @@ from lily.cli import public_agent_report
 from lily.rich import live_activity_blocks
 from lily.sandbox import sandbox_status
 from lily.code_workspace import CodeWorkspace
+from lily.skill_engine import select_skill
 from lily.model_router import ModelProfile, ModelRouter
 from lily.plugin_manager import plugin_manager
 from lily.db import Database
@@ -288,6 +289,55 @@ class LilyCoreTests(unittest.TestCase):
                 self.assertEqual(item["progress"], "50%")
                 await database.update_encoding_job("abc123", state="completed", progress="Completed")
                 self.assertEqual((await database.get_encoding_job("abc123"))["state"], "completed")
+        asyncio.run(run())
+
+    def test_automatic_skill_selection_preserves_approvals_and_cooldowns(self):
+        safe_skill = {
+            "id": "safe-skill", "name": "Greeting", "enabled": 1, "priority": 20,
+            "trigger": {"keywords": ["hello"]}, "action": {"action": "plugin_reply", "args": {"text": "Welcome"}},
+            "confirmation": "never", "execution_mode": "auto", "cooldown_seconds": 0, "created_at": 1,
+        }
+        matched = select_skill([safe_skill], "well, hello Lily", now=100)
+        self.assertEqual(matched.state, "automatic")
+        self.assertFalse(matched.plan.requires_confirmation)
+        self.assertEqual(matched.plan.action, "plugin_reply")
+
+        dangerous_skill = {
+            "id": "danger-skill", "name": "Unsafe ban", "enabled": 1, "priority": 50,
+            "trigger": {"contains": ["ban now"]}, "action": {"action": "ban_user", "args": {"user_id": 7}},
+            "confirmation": "never", "execution_mode": "auto", "cooldown_seconds": 0, "created_at": 2,
+        }
+        protected = select_skill([dangerous_skill], "please ban now", now=100)
+        self.assertEqual(protected.state, "approval_required")
+        self.assertTrue(protected.plan.requires_confirmation)
+        self.assertEqual(protected.plan.risk, "dangerous")
+
+        cooled = {**safe_skill, "last_run_at": 95, "cooldown_seconds": 30}
+        delayed = select_skill([cooled], "hello", now=100)
+        self.assertEqual(delayed.state, "cooldown")
+        self.assertEqual(delayed.cooldown_remaining, 25)
+
+    def test_skill_run_database_claim_history_and_priority(self):
+        async def run():
+            with tempfile.TemporaryDirectory() as directory:
+                database = Database(str(Path(directory) / "skills.sqlite3"))
+                await database.init()
+                low = await database.save_skill(1, 7, "Low", {"contains": ["hello"]}, {"action": "plugin_reply", "text": "low"}, confirmation="never", priority=10, execution_mode="auto")
+                high = await database.save_skill(1, 7, "High", {"contains": ["hello"]}, {"action": "plugin_reply", "text": "high"}, confirmation="never", cooldown_seconds=60, priority=500, execution_mode="auto")
+                bounded = await database.save_skill(1, 7, "Bounded", {"contains": ["later"]}, {"action": "plugin_reply", "text": "later"}, cooldown_seconds="not-a-number", priority="not-a-number", execution_mode="invalid")
+                skills = await database.list_skills(1)
+                self.assertEqual(skills[0]["id"], high)
+                self.assertEqual(next(item for item in skills if item["id"] == bounded)["cooldown_seconds"], 0)
+                self.assertEqual(next(item for item in skills if item["id"] == bounded)["priority"], 100)
+                self.assertEqual(next(item for item in skills if item["id"] == bounded)["execution_mode"], "suggest")
+                self.assertTrue(await database.claim_skill_run(high, 60, now=1_000))
+                self.assertFalse(await database.claim_skill_run(high, 60, now=1_030))
+                self.assertTrue(await database.claim_skill_run(high, 60, now=1_060))
+                run_id = await database.create_skill_run(high, 1, 7, "plugin_reply", "running", "High")
+                await database.finish_skill_run(run_id, "completed", "Completed")
+                history = await database.list_skill_runs(1, 7)
+                self.assertEqual(history[0]["state"], "completed")
+                self.assertEqual(history[0]["detail"], "Completed")
         asyncio.run(run())
 
     def test_model_family_payload_shapes_tokens_and_reasoning(self):

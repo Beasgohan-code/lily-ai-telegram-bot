@@ -12,6 +12,7 @@ from .knowledge_library import catalog
 from .sandbox import sandbox_status
 from .web_media import web_search
 from .code_workspace import code_workspace
+from .skill_engine import select_skill
 
 
 def public_agent_report(plan) -> dict[str, object]:
@@ -31,6 +32,14 @@ def public_agent_report(plan) -> dict[str, object]:
 async def _agent_plan(text: str) -> dict[str, object]:
     plan = await ai.plan(text, {"chat_type": "cli", "reply": {}}, [], {"memory_enabled": False})
     return public_agent_report(plan)
+
+
+async def _skill_orchestrator(text: str, chat_id: int, user_id: int) -> dict[str, object]:
+    """Preview automatic-skill selection before falling back to the LLM planner."""
+    match = select_skill(await db.list_skills(chat_id), text)
+    if match:
+        return {"source": "automatic_skill", "match": match.public_dict(), "executes": False}
+    return {"source": "llm_agent", "plan": await _agent_plan(text), "executes": False}
 
 
 async def _interactive_agent() -> int:
@@ -82,6 +91,12 @@ async def run(args: argparse.Namespace) -> int:
         else:
             output = code_workspace.validate(owner, args.project)
         print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "skill-match":
+        print(json.dumps(await _skill_orchestrator(args.text, args.chat_id, args.user_id), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "skill-runs":
+        print(json.dumps(await db.list_skill_runs(args.chat_id, args.user_id, args.limit), ensure_ascii=False, indent=2))
         return 0
     if args.command == "plan":
         plan = await ai.plan(args.text, {"chat_type": "cli", "reply": {}}, [], {"memory_enabled": False})
@@ -155,6 +170,14 @@ def main() -> None:
     archive.add_argument("project")
     validate = workspace_sub.add_parser("validate", help="Syntax-check supported source files without running them.")
     validate.add_argument("project")
+    skill_match = sub.add_parser("skill-match", help="Preview auto-skill matching before Lily’s LLM planner; never executes.")
+    skill_match.add_argument("chat_id", type=int)
+    skill_match.add_argument("user_id", type=int)
+    skill_match.add_argument("text")
+    skill_runs = sub.add_parser("skill-runs", help="List redacted automatic-skill outcomes for a chat/user.")
+    skill_runs.add_argument("chat_id", type=int)
+    skill_runs.add_argument("--user-id", type=int, default=None)
+    skill_runs.add_argument("--limit", type=int, default=20)
     sub.add_parser("skills", help="List Lily’s curated operating skills.")
     sub.add_parser("projects", help="List managed bot registry records (no secrets).")
     sub.add_parser("run-profiles", help="List approved managed-bot runtime profiles.")

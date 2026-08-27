@@ -23,3 +23,7 @@ Lily’s code creator writes only under `work/code-workspaces/<owner>/<project>/
 `validate` performs only fixed syntax checks for Python and JSON; it does **not** execute generated code. In Telegram, ordinary-language code-creator requests produce a Lily-owned starter workspace and deliver a ZIP archive after safe public progress stages. No arbitrary shell command is accepted through Telegram or this console.
 
 The `bot` and `api` commands intentionally run in the foreground for local development. The available terminal actions are fixed (`doctor`, `sandbox`, `status`, `search`, `agent`, `check`, `bot`, and `api`) and do not accept arbitrary commands. A sandbox terminal is not a permanent host; use a supervised service on an always-on Ubuntu machine for production.
+
+## LLM orchestration and automatic skills
+
+Use `./commands/ubuntu-sandbox.sh skill-match <chat_id> <user_id> "<message>"` to obtain a non-executing preview. It reports whether Lily would select a matching automatic skill or fall back to the LLM agent plan, along with a safe action summary, risk, confirmation requirement, cooldown state, and public stages. Use `./commands/ubuntu-sandbox.sh skill-runs <chat_id> --user-id <user_id>` to inspect redacted run outcomes. These operator commands cannot execute a skill or interpret text as a shell command.
