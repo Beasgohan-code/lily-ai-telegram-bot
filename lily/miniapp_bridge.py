@@ -20,6 +20,8 @@ from .agent import Plan, ai
 from .agent_team import public_team_summary
 from .config import Settings, settings
 from .db import Database, db
+from .group_controls import GROUP_CONTROL_MAP
+from .rich import rich
 
 
 class MiniAppAuthError(ValueError):
@@ -114,6 +116,26 @@ def public_model_status(values: list[dict[str, Any]]) -> list[dict[str, object]]
     ]
 
 
+def miniapp_owner_access(user: MiniAppUser, config: Settings) -> bool:
+    """Owner authority comes only from a configured Telegram ID, never client data."""
+    return bool(config.admin_user_ids) and user.id in config.admin_user_ids
+
+
+def _safe_event_rows(events: list[dict[str, Any]]) -> list[dict[str, object]]:
+    return [{"event": str(event.get("event") or "activity")[:80], "created_at": int(event.get("created_at") or 0)} for event in events[:12]]
+
+
+async def _owner_panel_summary(database: Database) -> dict[str, int]:
+    """Return owner-only aggregate counters; never enumerate another user’s work."""
+    tables = ("chats", "managed_projects", "code_project_jobs", "audit_log")
+    values: dict[str, int] = {}
+    async with database.connect() as connection:
+        for table in tables:
+            row = await (await connection.execute(f"SELECT COUNT(*) AS count FROM {table}")).fetchone()
+            values[table] = int(row["count"] if row else 0)
+    return values
+
+
 def install_miniapp_routes(app: Any, database: Database = db, config: Settings = settings) -> None:
     """Attach minimal owner-scoped Mini App routes to Lily's existing FastAPI app."""
     async def user_from_request(request: Request) -> MiniAppUser:
@@ -123,6 +145,19 @@ def install_miniapp_routes(app: Any, database: Database = db, config: Settings =
             return validate_init_data(_init_data(request), config.bot_token, config.miniapp_init_data_ttl_seconds)
         except MiniAppAuthError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    async def group_admin_from_request(request: Request, chat_id: int) -> MiniAppUser:
+        user = await user_from_request(request)
+        if chat_id >= 0:
+            raise HTTPException(status_code=400, detail="Provide a numeric group or supergroup chat ID.")
+        try:
+            membership = await rich.call("getChatMember", {"chat_id": chat_id, "user_id": user.id})
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Lily could not verify administrator access for this group.") from exc
+        status = str(membership.get("status") or "") if isinstance(membership, dict) else ""
+        if status not in {"creator", "administrator"}:
+            raise HTTPException(status_code=403, detail="This signed Telegram user is not an administrator of that group.")
+        return user
 
     @app.get("/miniapp/health")
     async def miniapp_health():
@@ -145,6 +180,53 @@ def install_miniapp_routes(app: Any, database: Database = db, config: Settings =
             "managed_projects": [{key: project[key] for key in ("slug", "runtime", "run_profile", "state", "revision", "updated_at") if key in project} for project in projects],
             "models": models,
             "ai_mode": "free-first configured routing" if any(item["available"] for item in models) else "no available configured model",
+        }
+
+    @app.get("/miniapp/v1/panel/owner")
+    async def miniapp_owner_panel(request: Request):
+        user = await user_from_request(request)
+        if not miniapp_owner_access(user, config):
+            raise HTTPException(status_code=403, detail="This signed Telegram user is not configured as a Lily owner.")
+        models = public_model_status(await ai.status())
+        return {
+            "role": "owner",
+            "user": user.public_dict(),
+            "service": {
+                "miniapp_bridge_enabled": bool(config.enable_miniapp_bridge),
+                "agent_team_enabled": bool(config.enable_agent_team),
+                "managed_supervisor_enabled": bool(config.enable_managed_service_supervisor),
+                "configured_model_count": sum(1 for model in models if model["available"]),
+                "group_control_count": len(GROUP_CONTROL_MAP),
+            },
+            "aggregates": await _owner_panel_summary(database),
+            "models": models,
+            "notice": "Owner panel is read-only. Start, stop, deployment, and group changes remain in Lily’s Telegram approval flow.",
+        }
+
+    @app.get("/miniapp/v1/panel/group")
+    async def miniapp_group_admin_panel(request: Request, chat_id: int):
+        user = await group_admin_from_request(request, chat_id)
+        values = await database.get_chat_settings(chat_id)
+        controls = await database.get_controls(chat_id)
+        events = await database.recent_audit(chat_id, limit=12)
+        reports = await database.list_reports(chat_id)
+        filters = await database.list_filters(chat_id)
+        pending = await database.list_pending_verifications(chat_id)
+        return {
+            "role": "group_admin",
+            "user": user.public_dict(),
+            "chat_id": chat_id,
+            "summary": {
+                "title": str(values.get("title") or "Group")[:160],
+                "controls_enabled": sum(1 for enabled in controls.values() if enabled),
+                "controls_total": len(GROUP_CONTROL_MAP),
+                "open_reports": len(reports),
+                "filters": len(filters),
+                "pending_verifications": len(pending),
+            },
+            "controls": [{"key": key, "enabled": bool(controls.get(key, control.default_enabled)), "label": control.label, "risk": control.risk} for key, control in GROUP_CONTROL_MAP.items()],
+            "recent_activity": _safe_event_rows(events),
+            "notice": "This panel is read-only. Open Lily in Telegram to prepare and confirm any group change.",
         }
 
     @app.post("/miniapp/v1/assistant/preview")

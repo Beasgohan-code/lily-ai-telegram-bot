@@ -6,6 +6,7 @@ import hmac
 import json
 import os
 import tempfile
+import time
 import unittest
 import zipfile
 from collections import Counter
@@ -15,6 +16,7 @@ from urllib.parse import urlencode
 from unittest.mock import AsyncMock, patch
 
 import httpx
+from fastapi import FastAPI
 
 from lily.agent import ACTIONS, AIClient, AgentTeamMemo, Plan
 from lily.agent_team import merge_role_reviews, public_team_summary, redact_team_text, role_review_context, select_roles
@@ -26,7 +28,7 @@ from lily.code_workspace import CodeWorkspace
 from lily.skill_engine import select_skill
 from lily.service_supervisor import ManagedServiceSupervisor, ProcessResult, SupervisorError
 from lily.agent_roles import assign_roles, catalog as agent_role_catalog, catalog_summary
-from lily.miniapp_bridge import MiniAppAuthError, public_miniapp_plan, public_model_status, validate_init_data
+from lily.miniapp_bridge import MiniAppAuthError, MiniAppUser, _safe_event_rows, install_miniapp_routes, miniapp_owner_access, public_miniapp_plan, public_model_status, validate_init_data
 from lily.model_router import ModelProfile, ModelRouter
 from lily.plugin_manager import plugin_manager
 from lily.db import Database
@@ -36,7 +38,7 @@ from lily.rich import confirmation_keyboard
 from lily.tools import safe_filename
 import lily.web_media as web_media
 from lily.web_media import WebSearch, stream_links
-from lily.config import settings
+from lily.config import Settings, settings
 from lily.free_models import CATALOG, PRESETS, profiles_for_presets
 from lily.group_controls import GROUP_CONTROLS, GROUP_CONTROL_MAP
 from lily.bot_factory import BotFactoryError, EnvironmentWizard, ManagedBotFactory
@@ -501,6 +503,57 @@ class LilyCoreTests(unittest.TestCase):
         self.assertEqual(public["team"]["roles"], [{"role": "Safety Reviewer", "division": "assurance"}])
         models = public_model_status([{"name": "Free Router", "model": "small", "family": "openai", "privacy_tier": "private", "capabilities": ["chat"], "available": True, "api_key": "not-public", "last_error": "not-public"}])
         self.assertEqual(models, [{"name": "Free Router", "model": "small", "family": "openai", "privacy_tier": "private", "capabilities": ["chat"], "available": True}])
+
+    def test_miniapp_owner_and_admin_panel_routes_are_server_scoped(self):
+        owner = MiniAppUser(77, "Lily", "lily_owner")
+        stranger = MiniAppUser(78, "Other", "other")
+        config = Settings(bot_token="test-token", enable_miniapp_bridge=True, admin_user_ids=(77,))
+        self.assertTrue(miniapp_owner_access(owner, config))
+        self.assertFalse(miniapp_owner_access(stranger, config))
+        self.assertFalse(miniapp_owner_access(owner, Settings(bot_token="test-token", enable_miniapp_bridge=True, admin_user_ids=())))
+        events = _safe_event_rows([{"event": "ban_user", "created_at": 123, "detail": {"user_id": 99, "reason": "private"}}])
+        self.assertEqual(events, [{"event": "ban_user", "created_at": 123}])
+        app = FastAPI()
+        install_miniapp_routes(app, Database(":memory:"), config)
+        paths = {route.path for route in app.routes}
+        self.assertIn("/miniapp/v1/panel/owner", paths)
+        self.assertIn("/miniapp/v1/panel/group", paths)
+
+    def test_miniapp_panel_endpoints_require_signed_configured_owner_and_live_group_admin(self):
+        token = "panel-test-token"
+        values = {"auth_date": str(int(time.time())), "query_id": "PANEL", "user": json.dumps({"id": 77, "first_name": "Lily"}, separators=(",", ":"))}
+        check_string = "\n".join(f"{key}={values[key]}" for key in sorted(values))
+        secret = hmac.new(b"WebAppData", token.encode("utf-8"), hashlib.sha256).digest()
+        init_data = urlencode({**values, "hash": hmac.new(secret, check_string.encode("utf-8"), hashlib.sha256).hexdigest()})
+
+        async def run():
+            with tempfile.TemporaryDirectory() as directory:
+                database = Database(str(Path(directory) / "panel.sqlite3"))
+                await database.init()
+                await database.audit(-100_123, 77, "configure_group_control", {"secret": "not public"})
+                app = FastAPI()
+                config = Settings(bot_token=token, enable_miniapp_bridge=True, miniapp_init_data_ttl_seconds=86_400, admin_user_ids=(77,))
+                install_miniapp_routes(app, database, config)
+
+                async def administrator_call(method, payload):
+                    self.assertEqual(method, "getChatMember")
+                    self.assertEqual(payload, {"chat_id": -100_123, "user_id": 77})
+                    return {"status": "administrator"}
+
+                transport = httpx.ASGITransport(app=app)
+                async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                    headers = {"X-Telegram-Init-Data": init_data}
+                    with patch("lily.miniapp_bridge.rich.call", new=AsyncMock(side_effect=administrator_call)):
+                        owner = await client.get("/miniapp/v1/panel/owner", headers=headers)
+                        group = await client.get("/miniapp/v1/panel/group", params={"chat_id": -100_123}, headers=headers)
+                    self.assertEqual(owner.status_code, 200)
+                    self.assertEqual(owner.json()["aggregates"]["audit_log"], 1)
+                    self.assertNotIn("secret", json.dumps(owner.json()))
+                    self.assertEqual(group.status_code, 200)
+                    self.assertEqual(group.json()["role"], "group_admin")
+                    self.assertEqual(group.json()["recent_activity"], [{"event": "configure_group_control", "created_at": group.json()["recent_activity"][0]["created_at"]}])
+                    self.assertNotIn("secret", json.dumps(group.json()))
+        asyncio.run(run())
 
     def test_managed_service_supervisor_is_allowlisted_owned_and_redacted(self):
         async def run():
