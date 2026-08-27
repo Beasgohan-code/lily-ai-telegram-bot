@@ -14,8 +14,10 @@ Usage: ./commands/ubuntu-sandbox.sh <command> [arguments]
 
 Safe controls:
   doctor                 Print redacted local diagnostics
+  sandbox                Print bounded local-runtime capabilities
   status                 Print model/provider health
   profiles               List fixed approved managed-bot run profiles
+  search <query>         Search through Lily's configured web-search provider
   plan <request>         Print a structured local plan
   preview <request>      Print public stages only; never executes
   agent [request]        Run Lily's safe planning agent (interactive when omitted)
@@ -34,13 +36,13 @@ case "$command" in
   help|-h|--help)
     usage
     ;;
-  doctor|status|profiles)
+  doctor|sandbox|status|profiles)
     case "$command" in
       profiles) exec ./commands/cli.sh run-profiles ;;
       *) exec ./commands/cli.sh "$command" ;;
     esac
     ;;
-  plan|preview|ask)
+  plan|preview|ask|search)
     shift
     if [[ "$#" -eq 0 ]]; then
       echo "Error: $command needs a request." >&2
@@ -48,6 +50,9 @@ case "$command" in
     fi
     if [[ "$command" == "ask" ]]; then
       exec ./commands/cli.sh ask "$*"
+    fi
+    if [[ "$command" == "search" ]]; then
+      exec ./commands/cli.sh search "$*"
     fi
     exec ./commands/cli.sh "$command" "$*"
     ;;

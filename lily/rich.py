@@ -98,6 +98,16 @@ def activity_status(stage: str) -> dict[str, Any]:
     return details("Lily activity", [paragraph(str(stage)[:400])], is_open=False)
 
 
+def live_activity_blocks(summary: str, stages: list[str], status: str) -> list[dict[str, Any]]:
+    """Build a safe draft payload that never contains model reasoning or raw commands."""
+    return [
+        heading("Lily live activity", 3),
+        paragraph(str(summary)[:800]),
+        activity_status(str(status)[:400]),
+        details("Public execution stages", [list_block([str(stage)[:180] for stage in stages[:8]])]),
+    ]
+
+
 def rich_message(blocks: list[dict[str, Any]]) -> dict[str, Any]:
     return {"blocks": blocks}
 
@@ -174,12 +184,12 @@ class RichClient:
         except Exception:
             return False
 
-    async def preview(self, chat_id: int, summary: str, stages: list[str], draft_id: int | str | None = None) -> bool:
+    async def preview(self, chat_id: int, summary: str, stages: list[str], draft_id: int | str | None = None, status: str = "Waiting for confirmation or starting the approved task.") -> bool:
         """Send an optional live Rich Message draft with public task stages only."""
         normalized_id = draft_id
         if isinstance(draft_id, str):
             normalized_id = int(hashlib.blake2s(draft_id.encode("utf-8"), digest_size=4).hexdigest(), 16)
-        return await self.draft(chat_id, [heading("Lily preview", 3), paragraph(summary[:800]), details("Planned stages", [list_block([str(stage)[:180] for stage in stages[:8]])]), activity_status("Waiting for confirmation or starting the approved task.")], draft_id=normalized_id, can_stop=True)
+        return await self.draft(chat_id, live_activity_blocks(summary, stages, status), draft_id=normalized_id, can_stop=True)
 
     def _fallback_html(self, blocks: list[dict[str, Any]]) -> str:
         parts: list[str] = []

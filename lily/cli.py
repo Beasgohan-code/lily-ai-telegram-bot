@@ -9,6 +9,8 @@ from .bot_factory import ManagedBotFactory
 from .config import settings
 from .db import db
 from .knowledge_library import catalog
+from .sandbox import sandbox_status
+from .web_media import web_search
 
 
 def public_agent_report(plan) -> dict[str, object]:
@@ -56,6 +58,13 @@ async def run(args: argparse.Namespace) -> int:
     await db.init()
     if args.command == "status":
         print(json.dumps(await ai.status(), indent=2))
+        return 0
+    if args.command == "sandbox":
+        print(json.dumps(sandbox_status(), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "search":
+        results = await web_search.search(args.query, args.limit)
+        print(json.dumps({"query": args.query, "results": results}, ensure_ascii=False, indent=2))
         return 0
     if args.command == "plan":
         plan = await ai.plan(args.text, {"chat_type": "cli", "reply": {}}, [], {"memory_enabled": False})
@@ -105,6 +114,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="lily-agent", description="Run Lily's model-aware agent from a shell.")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status", help="Print configured model health.")
+    sub.add_parser("sandbox", help="Print redacted local Ubuntu runtime capabilities.")
+    search = sub.add_parser("search", help="Search the web through Lily’s configured provider.")
+    search.add_argument("query")
+    search.add_argument("--limit", type=int, default=None, help="Return 1–10 results (provider-capped).")
     sub.add_parser("skills", help="List Lily’s curated operating skills.")
     sub.add_parser("projects", help="List managed bot registry records (no secrets).")
     sub.add_parser("run-profiles", help="List approved managed-bot runtime profiles.")

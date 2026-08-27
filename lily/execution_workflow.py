@@ -14,6 +14,8 @@ def visible_stages(action: str, risk: str, missing: list[str], requires_confirma
     stages = ["Understand the request", "Validate target, permissions, and capability gates"]
     if action in {"rename_file", "compress_file", "encode_media", "media_info", "stream_link"}:
         stages.append("Check the selected file and configured size limits")
+    elif action == "web_search":
+        stages.append("Validate the configured search provider and request limits")
     elif action in {"download_song", "download_chapter"}:
         stages.append("Check source allow-lists, direct-file format, and declared rights")
     elif action in {"register_managed_project", "provision_managed_project"}:

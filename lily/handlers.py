@@ -115,10 +115,13 @@ async def progress_message(update: Update, text_value: str) -> None:
     chat = update.effective_chat
     if not chat:
         return
+    public_status = str(text_value)[:400]
+    if settings.rich_live_previews:
+        await rich.preview(chat.id, "Lily is completing the approved request.", [public_status], draft_id=f"progress:{update.update_id}", status=public_status)
     blocks = [heading("Lily is working", 3)]
     if settings.custom_emoji_id:
         blocks.append(paragraph([custom_emoji(settings.custom_emoji_id, "✦"), " Agent activity"] ))
-    blocks.extend([activity_status("Public task status only — Lily does not show private model reasoning."), paragraph(text_value)])
+    blocks.extend([activity_status("Public runtime status only — Lily does not show private model reasoning, raw commands, or secrets."), paragraph(public_status)])
     await rich.send(chat.id, blocks, reply_to=update.effective_message.message_id if update.effective_message else None)
 
 
@@ -856,7 +859,7 @@ async def handle_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: 
     if plan.action == "none":
         memories = await db.recent_memories(f"chat:{update.effective_chat.id}:user:{update.effective_user.id}")
         if settings.rich_live_previews:
-            await rich.preview(update.effective_chat.id, plan.summary or "Preparing a response", plan.public_stages())
+            await rich.preview(update.effective_chat.id, plan.summary or "Preparing a response", plan.public_stages(), draft_id=f"progress:{update.update_id}", status="Preparing a safe response.")
         answer = await ai.answer(plan.args.get("prompt", plan.summary), _reply_context(update), memories, chat_settings)
         await send_long_rich(update.effective_chat.id, answer, title="Lily", reply_to=update.effective_message.message_id)
         return
@@ -864,11 +867,11 @@ async def handle_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: 
         action_id = await db.create_pending(update.effective_chat.id, update.effective_user.id, plan.action, _plan_dict(plan), settings.confirmation_ttl_seconds)
         extra = "For audio downloads, Yes confirms you have permission to download the material." if plan.action == "download_song" else "For chapter files, Yes confirms you have already declared distribution rights for the approved direct source." if plan.action == "download_chapter" else "Lily will execute this only after you approve it."
         if settings.rich_live_previews:
-            await rich.preview(update.effective_chat.id, plan.summary, plan.public_stages(), draft_id=action_id)
+            await rich.preview(update.effective_chat.id, plan.summary, plan.public_stages(), draft_id=action_id, status="Waiting for the requester’s confirmation.")
         await rich.send(update.effective_chat.id, [heading("Confirmation required", 2), paragraph(plan.summary), table([["Action", plan.action], ["Risk", plan.risk], ["Requested by", update.effective_user.full_name]]), details("Planned stages", [list_block(plan.public_stages())]), activity_status("Waiting for the requester’s decision."), paragraph(extra)], reply_markup=confirmation_keyboard(action_id), reply_to=update.effective_message.message_id)
         return
     if settings.rich_live_previews:
-        await rich.preview(update.effective_chat.id, plan.summary, plan.public_stages())
+        await rich.preview(update.effective_chat.id, plan.summary, plan.public_stages(), draft_id=f"progress:{update.update_id}", status="Preparing the approved Lily action.")
     blocks = [heading("Lily plan", 3), list_block(plan.public_stages())]
     if settings.rich_visible_progress:
         blocks.append(activity_status("Validating the approved request."))

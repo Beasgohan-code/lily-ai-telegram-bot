@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import tempfile
 import unittest
@@ -13,6 +14,8 @@ import httpx
 
 from lily.agent import ACTIONS, AIClient, Plan
 from lily.cli import public_agent_report
+from lily.rich import live_activity_blocks
+from lily.sandbox import sandbox_status
 from lily.model_router import ModelProfile, ModelRouter
 from lily.plugin_manager import plugin_manager
 from lily.db import Database
@@ -21,7 +24,7 @@ from lily.pagination import PaginationManager
 from lily.rich import confirmation_keyboard
 from lily.tools import safe_filename
 import lily.web_media as web_media
-from lily.web_media import stream_links
+from lily.web_media import WebSearch, stream_links
 from lily.config import settings
 from lily.free_models import CATALOG, PRESETS, profiles_for_presets
 from lily.group_controls import GROUP_CONTROLS, GROUP_CONTROL_MAP
@@ -50,6 +53,57 @@ class LilyCoreTests(unittest.TestCase):
         self.assertTrue(report["confirmation_required"])
         self.assertNotIn("args", report)
         self.assertIn("public_stages", report)
+
+    def test_ubuntu_sandbox_status_is_redacted_and_bounded(self):
+        report = sandbox_status()
+        self.assertEqual(report["runtime"], "ubuntu-local")
+        self.assertFalse(report["persistent_service"])
+        self.assertFalse(report["arbitrary_shell_execution"])
+        self.assertIn("search", report["terminal_options"])
+        self.assertNotIn("api_key", json.dumps(report).lower().replace("api_key_configured", ""))
+
+    def test_live_activity_blocks_contain_only_public_status(self):
+        blocks = live_activity_blocks("Encode permitted file", ["Validate file", "Deliver result"], "Validating the selected file.")
+        serialized = json.dumps(blocks)
+        self.assertIn("Lily live activity", serialized)
+        self.assertIn("Validating the selected file.", serialized)
+        self.assertNotIn("chain-of-thought", serialized.lower())
+
+    def test_configured_web_search_returns_bounded_deduplicated_results(self):
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "Heading": "Dragon Ball",
+                    "AbstractURL": "https://example.test/dragon-ball",
+                    "AbstractText": "Official summary",
+                    "RelatedTopics": [
+                        {"FirstURL": "https://example.test/dragon-ball", "Text": "Duplicate - ignored"},
+                        {"FirstURL": "https://example.test/wiki", "Text": "Dragon Ball - fan reference"},
+                        {"FirstURL": "https://example.test/news", "Text": "Dragon Ball news - current"},
+                    ],
+                }
+
+        class Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def get(self, *_args, **_kwargs):
+                return Response()
+
+        async def run():
+            with patch("lily.web_media.httpx.AsyncClient", return_value=Client()):
+                results = await WebSearch().search("Dragon Ball", limit=2)
+            self.assertEqual(len(results), 2)
+            self.assertEqual(results[0]["url"], "https://example.test/dragon-ball")
+            self.assertEqual(results[1]["url"], "https://example.test/wiki")
+
+        asyncio.run(run())
 
     def test_anime_announcement_has_rich_blocks_and_primary_buttons(self):
         blocks = ChannelPostService().announcement_blocks({

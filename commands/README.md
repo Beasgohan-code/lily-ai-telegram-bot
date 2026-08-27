@@ -14,6 +14,6 @@ Scripts load only an operator-provisioned `.env` file if it exists. They do not 
 
 ## Ubuntu terminal agent
 
-For a compact terminal interface, run `./commands/ubuntu-sandbox.sh help`. The `agent` command plans ordinary-language requests and prints only the action, risk, confirmation requirement, missing details, and visible stages. It **never executes** a plan, so it cannot become a generic terminal shell. Use `agent --ask "..."` for a local conversational answer.
+For a compact terminal interface, run `./commands/ubuntu-sandbox.sh help`. The `sandbox` option shows fixed, redacted local runtime capabilities. The `search "..."` option uses Lily’s configured web-search provider and prints structured results. The `agent` command plans ordinary-language requests and prints only the action, risk, confirmation requirement, missing details, and visible stages. It **never executes** a plan, so it cannot become a generic terminal shell. Use `agent --ask "..."` for a local conversational answer.
 
-The `bot` and `api` commands intentionally run in the foreground for local development. A sandbox terminal is not a permanent host; use a supervised service on an always-on Ubuntu machine for production.
+The `bot` and `api` commands intentionally run in the foreground for local development. The available terminal actions are fixed (`doctor`, `sandbox`, `status`, `search`, `agent`, `check`, `bot`, and `api`) and do not accept arbitrary commands. A sandbox terminal is not a permanent host; use a supervised service on an always-on Ubuntu machine for production.
