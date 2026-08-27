@@ -49,7 +49,7 @@ ADMIN_ACTIONS = {
     "tool_capabilities",
     "show_operating_skills",
     "mangadex_search", "mangadex_feed",
-    "member_profile", "set_chat_title", "set_chat_description", "set_group_default_permissions", "create_invite_link", "revoke_invite_link", "create_forum_topic", "close_forum_topic", "reopen_forum_topic", "delete_forum_topic", "list_administrators", "group_member_count",
+    "member_profile", "set_chat_title", "set_chat_description", "set_group_default_permissions", "create_invite_link", "revoke_invite_link", "create_forum_topic", "close_forum_topic", "reopen_forum_topic", "delete_forum_topic", "list_administrators", "group_member_count", "send_group_announcement", "post_checklist", "unpin_all_messages", "set_chat_sticker_set", "delete_chat_sticker_set",
 }
 
 
@@ -370,6 +370,36 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         await update.get_bot().unpin_chat_message(chat_id, message_id)
         await db.audit(chat_id, user_id, "unpin_message", {"message_id": message_id})
         return "The message was unpinned."
+    if action == "unpin_all_messages":
+        await rich.call("unpinAllChatMessages", {"chat_id": chat_id})
+        await db.audit(chat_id, user_id, "unpin_all_messages", {})
+        return "All pinned messages were removed from this group."
+    if action == "send_group_announcement":
+        text_value = str(plan.args.get("text") or "").strip()[:3000]
+        if not text_value:
+            return "Provide the announcement text."
+        await rich.send(chat_id, [heading("Group announcement", 2), paragraph(text_value)], reply_to=update.effective_message.message_id)
+        await db.audit(chat_id, user_id, "send_group_announcement", {"characters": len(text_value)})
+        return "The group announcement was posted."
+    if action == "post_checklist":
+        title = str(plan.args.get("title") or "").strip()[:160]
+        items = [str(item).strip()[:180] for item in plan.args.get("items", []) if str(item).strip()][:15]
+        if not title or not items:
+            return "Use: create checklist: Title | Item one | Item two"
+        await rich.send(chat_id, [heading(title, 2), list_block(items)], reply_to=update.effective_message.message_id)
+        await db.audit(chat_id, user_id, "post_checklist", {"title": title, "item_count": len(items)})
+        return f"Posted the checklist with {len(items)} item(s)."
+    if action == "set_chat_sticker_set":
+        sticker_set = str(plan.args.get("sticker_set") or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_]{1,64}", sticker_set):
+            return "Provide a valid Telegram sticker-set short name."
+        await rich.call("setChatStickerSet", {"chat_id": chat_id, "sticker_set_name": sticker_set})
+        await db.audit(chat_id, user_id, "set_chat_sticker_set", {"sticker_set": sticker_set})
+        return "The group sticker set was updated."
+    if action == "delete_chat_sticker_set":
+        await rich.call("deleteChatStickerSet", {"chat_id": chat_id})
+        await db.audit(chat_id, user_id, "delete_chat_sticker_set", {})
+        return "The group sticker set was removed."
     if action == "set_settings":
         allowed = {"personality", "language", "mention_only", "memory_enabled", "auto_confirm_safe", "welcome_enabled", "welcome_text", "daily_request_limit", "monthly_request_limit", "daily_bytes_limit", "monthly_bytes_limit", "warning_escalation"}
         patch = {key: value for key, value in plan.args.items() if key in allowed}

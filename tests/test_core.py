@@ -699,6 +699,27 @@ class LilyCoreTests(unittest.TestCase):
         self.assertTrue(revoke.requires_confirmation)
         self.assertIn("invite link", revoke.missing[0])
 
+    def test_additional_group_tools_are_bounded_confirmed_and_role_routed(self):
+        client = AIClient()
+        announcement = client.heuristic_plan("Lily group announcement: The server maintenance starts at 8 PM.", {"chat_type": "group", "reply": {}})
+        self.assertEqual(announcement.action, "send_group_announcement")
+        self.assertTrue(announcement.requires_confirmation)
+        self.assertEqual(announcement.args["text"], "The server maintenance starts at 8 PM.")
+        checklist = client.heuristic_plan("Lily create checklist: Release tasks | Run tests | Review logs", {"chat_type": "group", "reply": {}})
+        self.assertEqual(checklist.action, "post_checklist")
+        self.assertEqual(checklist.args["items"], ["Run tests", "Review logs"])
+        pins = client.heuristic_plan("Lily clear all pins", {"chat_type": "group", "reply": {}})
+        self.assertEqual(pins.action, "unpin_all_messages")
+        self.assertEqual(pins.risk, "dangerous")
+        sticker = client.heuristic_plan("Lily set group sticker set to team_stickers", {"chat_type": "group", "reply": {}})
+        self.assertEqual(sticker.action, "set_chat_sticker_set")
+        self.assertEqual(sticker.args["sticker_set"], "team_stickers")
+        invalid_sticker = Plan.from_dict({"action": "set_chat_sticker_set", "risk": "safe", "requires_confirmation": False, "args": {"sticker_set": "spaces are invalid"}})
+        self.assertEqual(invalid_sticker.risk, "dangerous")
+        self.assertTrue(invalid_sticker.requires_confirmation)
+        self.assertTrue(invalid_sticker.missing)
+        self.assertEqual(assign_roles(checklist).primary.slug, "community-moderator")
+
     def test_new_group_management_executor_uses_fixed_api_methods_and_audits(self):
         class Chat:
             id = 100
@@ -732,10 +753,15 @@ class LilyCoreTests(unittest.TestCase):
                         return {"invite_link": "https://t.me/+ExampleInvite"}
                     return True
 
-                with patch("lily.handlers.db", database), patch("lily.handlers.rich.call", new=AsyncMock(side_effect=fixed_call)):
+                with patch("lily.handlers.db", database), patch("lily.handlers.rich.call", new=AsyncMock(side_effect=fixed_call)), patch("lily.handlers.rich.send", new=AsyncMock(return_value={})) as send:
                     locked = await execute_plan(UpdateStub(), ContextStub(), Plan(action="set_group_default_permissions", args={"mode": "read_only"}))
                     invite = await execute_plan(UpdateStub(), ContextStub(), Plan(action="create_invite_link", args={"name": "weekend", "member_limit": 20, "expire_hours": 24}))
                     closed = await execute_plan(UpdateStub(), ContextStub(), Plan(action="close_forum_topic", args={"message_thread_id": 42}))
+                    unpinned = await execute_plan(UpdateStub(), ContextStub(), Plan(action="unpin_all_messages"))
+                    announcement = await execute_plan(UpdateStub(), ContextStub(), Plan(action="send_group_announcement", args={"text": "Maintenance at 8 PM."}))
+                    checklist = await execute_plan(UpdateStub(), ContextStub(), Plan(action="post_checklist", args={"title": "Release", "items": ["Run tests", "Review logs"]}))
+                    stickers = await execute_plan(UpdateStub(), ContextStub(), Plan(action="set_chat_sticker_set", args={"sticker_set": "team_stickers"}))
+                    removed_stickers = await execute_plan(UpdateStub(), ContextStub(), Plan(action="delete_chat_sticker_set"))
                     invalid_mode = await execute_plan(UpdateStub(), ContextStub(), Plan(action="set_group_default_permissions", args={"mode": "unrestricted"}))
                     invalid_topic = await execute_plan(UpdateStub(), ContextStub(), Plan(action="close_forum_topic", args={"message_thread_id": "invalid"}))
                     with self.assertRaises(ValueError):
@@ -743,18 +769,25 @@ class LilyCoreTests(unittest.TestCase):
                 self.assertEqual(locked, "Regular members are now read-only.")
                 self.assertIn("https://t.me/+ExampleInvite", invite)
                 self.assertEqual(closed, "The forum topic was closed.")
+                self.assertEqual(unpinned, "All pinned messages were removed from this group.")
+                self.assertEqual(announcement, "The group announcement was posted.")
+                self.assertEqual(checklist, "Posted the checklist with 2 item(s).")
+                self.assertEqual(stickers, "The group sticker set was updated.")
+                self.assertEqual(removed_stickers, "The group sticker set was removed.")
                 self.assertIn("normal or read-only", invalid_mode)
                 self.assertIn("valid numeric", invalid_topic)
-                self.assertEqual([call[0] for call in api_calls], ["setChatPermissions", "createChatInviteLink", "closeForumTopic"])
+                self.assertEqual([call[0] for call in api_calls], ["setChatPermissions", "createChatInviteLink", "closeForumTopic", "unpinAllChatMessages", "setChatStickerSet", "deleteChatStickerSet"])
                 self.assertTrue(api_calls[0][1]["permissions"]["can_send_messages"] is False)
                 self.assertEqual(api_calls[1][1]["member_limit"], 20)
                 self.assertEqual(api_calls[2][1]["message_thread_id"], 42)
+                self.assertEqual(api_calls[4][1]["sticker_set_name"], "team_stickers")
+                self.assertEqual(send.await_count, 2)
                 controls = await database.get_controls(100)
                 self.assertTrue(controls["default_member_permissions"])
                 self.assertTrue(controls["invite_link_management"])
                 self.assertTrue(controls["forum_topic_management"])
                 events = await database.recent_audit(100, limit=10)
-                self.assertEqual({item["event"] for item in events}, {"set_group_default_permissions", "create_invite_link", "close_forum_topic"})
+                self.assertEqual({item["event"] for item in events}, {"set_group_default_permissions", "create_invite_link", "close_forum_topic", "unpin_all_messages", "send_group_announcement", "post_checklist", "set_chat_sticker_set", "delete_chat_sticker_set"})
 
         asyncio.run(run())
 

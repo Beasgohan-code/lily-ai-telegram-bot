@@ -28,14 +28,14 @@ ACTIONS = {
     "tool_capabilities",
     "show_operating_skills",
     "mangadex_search", "mangadex_feed",
-    "member_profile", "set_chat_title", "set_chat_description", "set_group_default_permissions", "create_invite_link", "revoke_invite_link", "create_forum_topic", "close_forum_topic", "reopen_forum_topic", "delete_forum_topic", "list_administrators", "group_member_count",
+    "member_profile", "set_chat_title", "set_chat_description", "set_group_default_permissions", "create_invite_link", "revoke_invite_link", "create_forum_topic", "close_forum_topic", "reopen_forum_topic", "delete_forum_topic", "list_administrators", "group_member_count", "send_group_announcement", "post_checklist", "unpin_all_messages", "set_chat_sticker_set", "delete_chat_sticker_set",
 }
 
 RISK = {"safe", "risky", "dangerous"}
 RISK_LEVEL = {"safe": 0, "risky": 1, "dangerous": 2}
 ACTION_MIN_RISK = {
     "ban_user": "dangerous", "kick_user": "dangerous", "mute_user": "dangerous", "restrict_user": "dangerous", "delete_message": "dangerous", "purge_messages": "dangerous",
-    "set_chat_title": "dangerous", "set_chat_description": "dangerous", "forget_memory": "risky", "generate_speech": "risky", "set_group_default_permissions": "dangerous", "create_invite_link": "dangerous", "revoke_invite_link": "dangerous", "create_forum_topic": "dangerous", "close_forum_topic": "dangerous", "reopen_forum_topic": "dangerous", "delete_forum_topic": "dangerous",
+    "set_chat_title": "dangerous", "set_chat_description": "dangerous", "forget_memory": "risky", "generate_speech": "risky", "send_group_announcement": "risky", "post_checklist": "risky", "unpin_all_messages": "dangerous", "set_chat_sticker_set": "dangerous", "delete_chat_sticker_set": "dangerous", "set_group_default_permissions": "dangerous", "create_invite_link": "dangerous", "revoke_invite_link": "dangerous", "create_forum_topic": "dangerous", "close_forum_topic": "dangerous", "reopen_forum_topic": "dangerous", "delete_forum_topic": "dangerous",
 }
 CONFIRM_ACTIONS = {action for action, risk in ACTION_MIN_RISK.items() if risk != "safe"} | {"download_song", "download_chapter", "register_managed_project", "provision_managed_project", "create_poll", "set_auto_rename", "track_series", "update_tracked_series"}
 TARGET_ACTIONS = {"ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "restrict_user", "unrestrict_user", "demote_user", "promote_user", "warn_user", "member_profile", "show_warnings"}
@@ -77,6 +77,14 @@ class Plan:
             self.missing = list(dict.fromkeys([*self.missing, "Provide the invite link Lily should revoke"]))[:8]
         if self.action == "generate_speech" and not str(self.args.get("text") or "").strip():
             self.missing = list(dict.fromkeys([*self.missing, "Provide the text Lily should speak"]))[:8]
+        if self.action == "send_group_announcement" and not str(self.args.get("text") or "").strip():
+            self.missing = list(dict.fromkeys([*self.missing, "Provide the announcement text"]))[:8]
+        if self.action == "post_checklist":
+            items = self.args.get("items") if isinstance(self.args.get("items"), list) else []
+            if not str(self.args.get("title") or "").strip() or not any(str(item).strip() for item in items):
+                self.missing = list(dict.fromkeys([*self.missing, "Use: create checklist: Title | Item one | Item two"]))[:8]
+        if self.action == "set_chat_sticker_set" and not re.fullmatch(r"[A-Za-z0-9_]{1,64}", str(self.args.get("sticker_set") or "")):
+            self.missing = list(dict.fromkeys([*self.missing, "Provide a valid Telegram sticker-set short name"]))[:8]
         return self
 
     @classmethod
@@ -299,6 +307,11 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             parts = [part.strip() for part in body.split("|") if part.strip()]
             question, options = (parts[0], parts[1:]) if parts else ("", [])
             return Plan(intent="create_poll", summary="Create a group poll", action="create_poll", risk="risky", requires_confirmation=True, args={"question": question, "options": options, "anonymous": "non-anonymous" not in low}, missing=[] if question and 2 <= len(options) <= 10 else ["Use: create poll: Question | Option 1 | Option 2"], confidence=0.85)
+        if any(phrase in low for phrase in ("create checklist", "make checklist", "post checklist", "share checklist")):
+            body = re.sub(r"^.*?(?:create|make|post|share)\s+(?:a\s+)?checklist\s*:?[\s-]*", "", value, flags=re.I).strip()
+            parts = [part.strip()[:180] for part in body.split("|") if part.strip()]
+            title, items = (parts[0], parts[1:]) if parts else ("", [])
+            return Plan(intent="post_checklist", summary="Post a bounded group checklist", action="post_checklist", risk="risky", requires_confirmation=True, args={"title": title[:160], "items": items[:15]}, missing=[] if title and items else ["Use: create checklist: Title | Item one | Item two"], confidence=0.85).enforce_safety()
         if any(word in low for word in ("media info", "media information", "inspect this file", "show file details")):
             return Plan(intent="media_info", summary="Inspect media metadata", action="media_info", risk="safe", confidence=0.9)
         if any(word in low for word in ("explain this message", "explain that message", "what does this message mean")):
@@ -530,6 +543,8 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
         if "purge" in low or "delete the last" in low and "messages" in low:
             count = next(iter(re.findall(r"\b(\d{1,3})\b", low)), "10")
             return Plan(intent="purge_messages", summary=f"Delete the last {count} messages", action="purge_messages", risk="dangerous", requires_confirmation=True, args={"count": min(100, int(count))}, confidence=0.8)
+        if any(phrase in low for phrase in ("unpin all", "clear all pins", "remove all pins")):
+            return Plan(intent="unpin_all_messages", summary="Remove all pinned messages from this group", action="unpin_all_messages", risk="dangerous", requires_confirmation=True, confidence=0.9).enforce_safety()
         if any(word in low for word in ("unpin", "remove pin")):
             return Plan(intent="unpin_message", summary="Unpin the selected message", action="unpin_message", risk="dangerous", requires_confirmation=True, args={"message_id": int(reply.get("message_id") or context.get("message_to_act_on") or 0)}, confidence=0.85)
         if any(word in low for word in ("show warnings", "warning history", "warnings for")):
@@ -577,6 +592,14 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
         if any(word in low for word in ("download song", "download this song", "get this audio")):
             url = next(iter(re.findall(r"https?://\S+", value)), "")
             return Plan(intent="download_song", summary="Download permitted audio", action="download_song", risk="dangerous", requires_confirmation=True, args={"url": url, "rights_confirmed": False}, missing=[] if url else ["Provide a direct URL to audio you are authorized to download"], confidence=0.75)
+        if any(phrase in low for phrase in ("group announcement", "announce to the group", "send a group announcement")):
+            text_value = re.sub(r"^.*?(?:group announcement|announce to the group|send a group announcement)\s*:?[\s-]*", "", value, flags=re.I).strip()
+            return Plan(intent="send_group_announcement", summary="Post a group announcement", action="send_group_announcement", risk="risky", requires_confirmation=True, args={"text": text_value[:3000]}, missing=[] if text_value else ["Provide the announcement text"], confidence=0.85).enforce_safety()
+        if any(phrase in low for phrase in ("set group sticker set", "set chat sticker set", "change group sticker set")):
+            sticker_set = re.sub(r"^.*?(?:set group sticker set|set chat sticker set|change group sticker set)\s*(?:to|:)?\s*", "", value, flags=re.I).strip().split()[0] if value.strip() else ""
+            return Plan(intent="set_chat_sticker_set", summary="Set the group sticker set", action="set_chat_sticker_set", risk="dangerous", requires_confirmation=True, args={"sticker_set": sticker_set}, confidence=0.85).enforce_safety()
+        if any(phrase in low for phrase in ("remove group sticker set", "delete group sticker set", "clear group sticker set")):
+            return Plan(intent="delete_chat_sticker_set", summary="Remove the group sticker set", action="delete_chat_sticker_set", risk="dangerous", requires_confirmation=True, confidence=0.85).enforce_safety()
         if any(word in low for word in ("post to my channel", "make a channel post", "create a post", "anime announcement", "episode announcement")):
             return Plan(intent="channel_post", summary="Create an anime-style channel announcement", action="start_channel_post", risk="dangerous", args={"post_type": "anime_announcement", "request": value}, confidence=0.85)
         if any(word in low for word in ("delete last post", "remove last post", "delete the previous post")):

@@ -76,6 +76,8 @@ Lily now supports richer Rose-style operations through ordinary language: promot
 
 Additional group-management skills now include group-wide **read-only mode** and normal-participation restoration, limited or expiring invite links, revocation of bot-created invite links, forum-topic creation and lifecycle management, an administrator roster, and current member count. All state-changing operations are treated as dangerous and require the requesting administrator’s explicit confirmation. Lily calls only fixed Telegram API methods for these skills and records a compact audit event; it does not construct shell commands or permit role-specific tool access. Forum actions need a forum-enabled chat and the bot’s topic-management right. Default-permission changes require the bot’s member-restriction right, while invite-link operations require the relevant invitation right.[1]
 
+Lily also supports a bounded **group announcement** and **checklist** publisher, global removal of pinned messages, and group sticker-set configuration. For example, say `Lily, group announcement: Maintenance starts at 8 PM` or `Lily, create checklist: Release tasks | Run tests | Review logs`. Announcements are capped at 3,000 characters; checklist titles and items are bounded; both require confirmation and are recorded in the audit log. `Lily, clear all pins`, `Lily, set group sticker set to team_stickers`, and `Lily, remove group sticker set` are dangerous administrator actions that require confirmation and call only their respective fixed Telegram API methods. Lily does not infer or download sticker packs, and it rejects invalid sticker-set short names.
+
 For streaming, reply to a Lily-managed file and ask for a direct streaming link. Lily downloads the file to managed storage, generates an expiring HMAC-signed URL, and exposes it through the optional FastAPI stream service. Set `LILY_STREAM_PUBLIC_BASE_URL` to an HTTPS reverse-proxy URL before enabling this feature. Do not expose the stream port directly to the internet or use it for files outside Lily’s managed work/download directories.
 
 For web search, Lily uses the configured search endpoint and returns rich result tables plus expandable snippets. The default is DuckDuckGo’s Instant Answer endpoint; configure an alternative compatible provider if you need broader coverage.
@@ -185,6 +187,11 @@ Lily, create forum topic called Releases.
 Lily, close this topic.
 Lily, show admins.
 Lily, how many members are here?
+Lily, group announcement: The maintenance window begins at 8 PM.
+Lily, create checklist: Release tasks | Run tests | Review logs.
+Lily, clear all pins.
+Lily, set group sticker set to team_stickers.
+Lily, remove group sticker set.
 Lily, add a case note for report 7 saying review a repeated violation.
 Lily, create a skill: when someone says “drop the link”, ask an admin before deleting the message.
 Lily, register bot manga-bot from https://github.com/example/manga-bot with python-main entrypoint bot.py.
