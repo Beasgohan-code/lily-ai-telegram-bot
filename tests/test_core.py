@@ -12,6 +12,7 @@ from unittest.mock import patch
 import httpx
 
 from lily.agent import ACTIONS, AIClient, Plan
+from lily.cli import public_agent_report
 from lily.model_router import ModelProfile, ModelRouter
 from lily.plugin_manager import plugin_manager
 from lily.db import Database
@@ -41,6 +42,14 @@ class LilyCoreTests(unittest.TestCase):
         self.assertEqual(payload["inline_keyboard"][0][0]["callback_data"], "confirm:abc:yes")
         self.assertEqual(payload["inline_keyboard"][0][0].get("style"), "primary")
         self.assertEqual(payload["inline_keyboard"][0][1].get("style"), "danger")
+
+    def test_ubuntu_agent_report_is_non_executing_and_omits_plan_arguments(self):
+        plan = Plan(intent="ban", summary="Remove a spammer", action="ban_user", risk="dangerous", requires_confirmation=True, args={"user_id": 12345}, missing=[])
+        report = public_agent_report(plan)
+        self.assertFalse(report["executes"])
+        self.assertTrue(report["confirmation_required"])
+        self.assertNotIn("args", report)
+        self.assertIn("public_stages", report)
 
     def test_anime_announcement_has_rich_blocks_and_primary_buttons(self):
         blocks = ChannelPostService().announcement_blocks({

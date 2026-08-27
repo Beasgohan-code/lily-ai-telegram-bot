@@ -11,6 +11,47 @@ from .db import db
 from .knowledge_library import catalog
 
 
+def public_agent_report(plan) -> dict[str, object]:
+    """Return only deliberate operator-facing plan information, never hidden reasoning."""
+    return {
+        "intent": plan.intent,
+        "summary": plan.summary,
+        "action": plan.action,
+        "risk": plan.risk,
+        "confirmation_required": plan.requires_confirmation,
+        "missing": plan.missing,
+        "public_stages": plan.public_stages(),
+        "executes": False,
+    }
+
+
+async def _agent_plan(text: str) -> dict[str, object]:
+    plan = await ai.plan(text, {"chat_type": "cli", "reply": {}}, [], {"memory_enabled": False})
+    return public_agent_report(plan)
+
+
+async def _interactive_agent() -> int:
+    print("Lily Ubuntu Agent — planning mode only. Nothing runs from this prompt.")
+    print("Enter a request, use /ask <question> for conversation, or /quit to exit.")
+    while True:
+        try:
+            value = input("lily> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+        if not value:
+            continue
+        if value.lower() in {"/quit", "/exit", "quit", "exit"}:
+            return 0
+        if value.lower() in {"/help", "help"}:
+            print("Requests produce a non-executing plan. Use /ask <question> for a normal AI answer.")
+            continue
+        if value.startswith("/ask "):
+            print(await ai.answer(value[5:], {"chat_type": "cli", "reply": {}}, [], {"memory_enabled": False}))
+            continue
+        print(json.dumps(await _agent_plan(value), ensure_ascii=False, indent=2))
+
+
 async def run(args: argparse.Namespace) -> int:
     await db.init()
     if args.command == "status":
@@ -25,8 +66,15 @@ async def run(args: argparse.Namespace) -> int:
         print(answer)
         return 0
     if args.command == "preview":
-        plan = await ai.plan(args.text, {"chat_type": "cli", "reply": {}}, [], {"memory_enabled": False})
-        print(json.dumps({"plan": plan.__dict__, "public_stages": plan.public_stages(), "executes": False}, ensure_ascii=False, indent=2))
+        print(json.dumps(await _agent_plan(args.text), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "agent":
+        if not args.text:
+            return await _interactive_agent()
+        if args.ask:
+            print(await ai.answer(args.text, {"chat_type": "cli", "reply": {}}, [], {"memory_enabled": False}))
+            return 0
+        print(json.dumps(await _agent_plan(args.text), ensure_ascii=False, indent=2))
         return 0
     if args.command == "skills":
         print(json.dumps(catalog(), ensure_ascii=False, indent=2))
@@ -66,6 +114,9 @@ def main() -> None:
         child.add_argument("text")
     preview = sub.add_parser("preview", help="Show a non-executing public action preview.")
     preview.add_argument("text")
+    agent = sub.add_parser("agent", help="Run a safe local planning agent; it never executes actions.")
+    agent.add_argument("text", nargs="?", help="Optional request to plan; omit for an interactive prompt.")
+    agent.add_argument("--ask", action="store_true", help="Answer the supplied text conversationally instead of planning it.")
     raise SystemExit(asyncio.run(run(parser.parse_args())))
 
 

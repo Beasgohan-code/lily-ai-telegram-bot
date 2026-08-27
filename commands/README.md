@@ -8,5 +8,12 @@ These scripts are for the operator on the persistent host. They do **not** expos
 | `run-api.sh` | Starts the standalone FastAPI streaming/API service using host configuration. |
 | `check.sh` | Runs compile and regression validation. |
 | `cli.sh` | Runs the safe local Lily CLI, for example `./commands/cli.sh doctor`. |
+| `ubuntu-sandbox.sh` | One safe Ubuntu terminal entrypoint for Lily diagnostics, agent planning, validation, and foreground services. |
 
 Scripts load only an operator-provisioned `.env` file if it exists. They do not echo its content.
+
+## Ubuntu terminal agent
+
+For a compact terminal interface, run `./commands/ubuntu-sandbox.sh help`. The `agent` command plans ordinary-language requests and prints only the action, risk, confirmation requirement, missing details, and visible stages. It **never executes** a plan, so it cannot become a generic terminal shell. Use `agent --ask "..."` for a local conversational answer.
+
+The `bot` and `api` commands intentionally run in the foreground for local development. A sandbox terminal is not a permanent host; use a supervised service on an always-on Ubuntu machine for production.
