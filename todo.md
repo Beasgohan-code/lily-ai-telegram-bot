@@ -1,9 +1,31 @@
 - [ ] Decide the always-on deployment target for the Python Telegram bot, FFmpeg worker, local Bot API server, and signed streaming service.
 - [ ] Add Groq, OpenRouter-compatible, Gemini-compatible, and Ollama provider profile templates with capability-aware fallback ordering.
 - [ ] Inspect mnfst/awesome-free-llm-apis and select only documented, stable, provider-compatible free-tier or local endpoints for Lily presets.
+- [ ] Classify every catalogued provider as OpenAI-compatible, OpenAI-compatible with provider quirks, native-adapter required, local/self-hosted, or intentionally excluded from automatic fallback.
+- [ ] Add preset coverage for documented compatible providers and feature-flag any provider that needs a custom request/response adapter.
+- [ ] Add a privacy tier to every fallback profile so anonymous or training-eligible endpoints never receive sensitive conversations, files, group logs, or moderation evidence by default.
+- [ ] Add test coverage for provider selection, missing-key skipping, anonymous-provider opt-in, and provider-specific request shaping.
+- [ ] Configure and verify Lily’s fallback tiers in this order: compatible free/self-hosted profiles, Gemini, OpenAI-compatible primary profiles, then Groq; keep anonymous public profiles opt-in.
+- [ ] Define the complete 60-control group-management matrix with explicit role, confirmation, and Telegram permission requirements.
+- [ ] Extend member governance with trusted roles, human-approval gates, title management, slow mode, join-request decisions, and moderation exemptions.
+- [ ] Extend anti-spam controls with media/link/domain/forward/mention/caps/duplicate/flood policies and configurable warning escalation.
+- [ ] Extend group automation with saved replies, schedules, inactivity alerts, recurring summaries, onboarding, verification, and staff notifications.
+- [ ] Extend privacy and reporting with audit export, retention settings, report queues, moderator notes, and protected action previews.
 - [ ] Inspect Shubhamsaboo/awesome-llm-apps for independently reusable agent workflow patterns, then implement them through Lily’s permissioned tool registry rather than copying application code.
 - [ ] Add Telegram Mini App `initData` HMAC validation and issue short-lived admin sessions only after server-side verification.
 - [ ] Expose authenticated Lily API endpoints for dashboard status, moderation settings, skills, media queues, search, and channel-post drafts.
 - [ ] Replace Mini App demonstration state with authenticated API loading, optimistic action handling, and error states.
 - [ ] Configure real provider keys, the HTTPS stream URL, and the Mini App URL in BotFather before production use.
 - [ ] Run an end-to-end test with a real test group, test channel, test upload, confirmation callback, and Mini App session.
+- [ ] Add a deterministic high-load fallback simulation covering concurrent requests, 429 rate limits, timeouts, malformed responses, cooldowns, and recovery without calling real providers.
+- [ ] Complete Rose-style natural-language group moderation actions and verify that all 60+ persisted control options are executable and auditable.
+- [ ] Add natural-language actions for granular restrictions, warnings, unpinning, rules, welcome and goodbye configuration, verification, filter lifecycle, and moderation case notes.
+- [ ] Extend moderation enforcement for invite, emoji, media, suspicious-text, new-member, and warning-escalation controls with safe audit records.
+- [ ] Upgrade warning escalation from passive records to configurable, bounded, auditable automatic restrictions with trusted-member exemptions.
+- [ ] Add natural-language group diagnostics for moderation health, control state, recent actions, verification queue, and AI provider availability.
+- [x] Implement additional safe Rose-style actions that can execute through the Bot API without requiring a separate persistent scheduler or user-session account.
+- [ ] Choose an always-on host and private networking model for Lily’s bot worker, FFmpeg jobs, Local Bot API server, SQLite/data storage, streaming gateway, and authenticated Mini App API.
+- [ ] Create a production environment-variable and secret-management matrix, including Telegram, provider fallback, Mini App authentication, streaming, filesystem, limits, and observability settings.
+- [ ] Run staged deployment validation with a test bot, group, channel, Mini App URL, provider health check, and large-file workflow before public rollout.
+- [ ] Add production deployment artifacts for a containerized Lily stack and a systemd-managed non-container option, including private ports, persistent volumes, and health checks.
+- [x] Add operational tools for admin export, controlled group cleanup, and retained moderation-case visibility without bypassing Lily permissions or confirmation gates.

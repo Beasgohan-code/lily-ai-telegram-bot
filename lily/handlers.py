@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import re
 from pathlib import Path
@@ -32,7 +33,7 @@ ADMIN_ACTIONS = {
     "ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "restrict_user", "unrestrict_user", "demote_user", "promote_user", "delete_message", "purge_messages", "report_user", "pin_message", "unpin_message",
     "set_settings", "create_skill", "set_group_rules", "start_channel_post", "publish_channel_post", "delete_last_post",
     "warn_user", "add_filter", "remove_filter", "set_lock", "save_note", "list_notes", "search_posts", "show_warnings", "set_auto_rename", "stream_link",
-    "configure_group_control", "group_controls_status", "group_diagnostics", "configure_warning_escalation", "trusted_member", "block_domain", "list_domains", "clear_warnings", "set_admin_title", "approve_join_request", "decline_join_request", "list_reports", "resolve_report", "audit_log", "set_welcome", "set_goodbye", "set_verification", "set_group_rules", "show_group_rules", "add_case_note", "list_case_notes", "create_poll",
+    "configure_group_control", "group_controls_status", "group_diagnostics", "configure_warning_escalation", "media_info", "export_audit", "trusted_member", "block_domain", "list_domains", "clear_warnings", "set_admin_title", "approve_join_request", "decline_join_request", "list_reports", "resolve_report", "audit_log", "set_welcome", "set_goodbye", "set_verification", "set_group_rules", "show_group_rules", "add_case_note", "list_case_notes", "create_poll",
 }
 
 
@@ -420,6 +421,18 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
     if action == "audit_log":
         events = await db.recent_audit(chat_id, limit=30)
         return "\n".join(f"• {item['event']} — {json.dumps(item.get('detail', {}), ensure_ascii=False)[:160]}" for item in events)[:3500] or "No Lily audit events are recorded yet."
+    if action == "export_audit":
+        events = await db.recent_audit(chat_id, limit=500)
+        output = settings.work_dir / f"lily_audit_{chat_id}_{int(datetime.now(timezone.utc).timestamp())}.csv"
+        with output.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["event_id", "event", "actor_id", "created_at", "details"])
+            for item in events:
+                writer.writerow([item.get("id"), item.get("event"), item.get("actor_id"), item.get("created_at"), json.dumps(item.get("detail", {}), ensure_ascii=False)])
+        await update.get_bot().send_document(chat_id, document=output.open("rb"), caption="Lily moderation audit export")
+        output.unlink(missing_ok=True)
+        await db.audit(chat_id, user_id, "export_audit", {"event_count": len(events)})
+        return f"Exported {len(events)} audit event(s)."
     if action == "plugin_reply":
         return str(plan.args.get("text") or plan.summary)[:3500]
     if action == "model_status":
@@ -458,6 +471,17 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         url = await media_generation.video(str(plan.args.get("prompt") or plan.summary), str(plan.args.get("aspect_ratio") or "16:9"), int(plan.args.get("duration_seconds") or 8))
         await rich.send(chat_id, [heading("Video ready", 2), paragraph("Lily generated a video from your brief."), blockquote(url, "Output link")])
         return f"Generated video: {url}"
+    if action == "media_info":
+        async def info_progress(value: str) -> None:
+            await progress_message(update, value)
+        ctx = ToolContext(update=update, context=context, db=db, progress=info_progress, source_file=plan.args.get("source_file"))
+        metadata = await tools.media_info(ctx)
+        fmt = metadata.get("format", {}) if isinstance(metadata, dict) else {}
+        rows = [["Property", "Value"], ["Format", fmt.get("format_name", "unknown")], ["Size", f"{int(float(fmt.get('size', 0) or 0)):,} bytes"], ["Duration", f"{float(fmt.get('duration', 0) or 0):.2f} seconds"]]
+        for stream in metadata.get("streams", [])[:6]:
+            rows.append([f"Stream {stream.get('index', '?')} ({stream.get('codec_type', 'unknown')})", f"{stream.get('codec_name', 'unknown')} {stream.get('width', '')}x{stream.get('height', '')}".strip()])
+        await rich.send(chat_id, [heading("Media information", 2), table(rows)])
+        return "Displayed media metadata."
     if action == "stream_link":
         async def stream_progress(value: str) -> None:
             await progress_message(update, value)
@@ -466,7 +490,7 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         filename = safe_filename(str(source.get("file_name") or "media.bin"))
         path = settings.work_dir / f"stream_{update.update_id}_{filename}"
         await tools._download_telegram_file(ctx, path)
-        return f"Your expiring direct streaming link is:\n{stream_links.create(path, user_id)}"
+        return f"Your expiring direct streaming link is:\n{await stream_links.create(path, user_id)}"
     if action == "set_auto_rename":
         enabled = bool(plan.args.get("enabled", True))
         await db.update_chat_settings(chat_id, {"auto_rename_enabled": enabled, "auto_rename_template": str(plan.args.get("template") or settings.auto_rename_template)}, update.effective_chat.title or "")

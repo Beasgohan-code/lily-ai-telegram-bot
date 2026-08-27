@@ -34,7 +34,7 @@ async def post_shutdown(application: Application) -> None:
 
 async def post_init(application: Application) -> None:
     await db.init()
-    if settings.stream_public_base_url:
+    if settings.stream_public_base_url and settings.stream_embedded:
         try:
             import uvicorn
             config = uvicorn.Config(stream_links.app(), host=settings.stream_bind_host, port=settings.stream_port, log_level="warning")

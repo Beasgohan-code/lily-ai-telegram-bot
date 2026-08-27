@@ -20,7 +20,7 @@ ACTIONS = {
     "start_channel_post", "publish_channel_post", "delete_last_post",
     "add_filter", "remove_filter", "set_lock", "save_note", "list_notes", "search_posts", "show_warnings",
     "plugin_reply", "model_status", "queue_status", "queue_list", "cancel_queue_job", "web_search", "stream_link", "set_auto_rename", "list_filters", "list_locks",
-    "configure_group_control", "group_controls_status", "group_diagnostics", "configure_warning_escalation", "trusted_member", "block_domain", "list_domains", "clear_warnings", "set_admin_title", "approve_join_request", "decline_join_request", "list_reports", "resolve_report", "audit_log", "add_case_note", "list_case_notes",
+    "configure_group_control", "group_controls_status", "group_diagnostics", "configure_warning_escalation", "media_info", "export_audit", "trusted_member", "block_domain", "list_domains", "clear_warnings", "set_admin_title", "approve_join_request", "decline_join_request", "list_reports", "resolve_report", "audit_log", "add_case_note", "list_case_notes",
 }
 
 RISK = {"safe", "risky", "dangerous"}
@@ -171,10 +171,17 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             parts = [part.strip() for part in body.split("|") if part.strip()]
             question, options = (parts[0], parts[1:]) if parts else ("", [])
             return Plan(intent="create_poll", summary="Create a group poll", action="create_poll", risk="risky", requires_confirmation=True, args={"question": question, "options": options, "anonymous": "non-anonymous" not in low}, missing=[] if question and 2 <= len(options) <= 10 else ["Use: create poll: Question | Option 1 | Option 2"], confidence=0.85)
+        if any(word in low for word in ("media info", "media information", "inspect this file", "show file details")):
+            return Plan(intent="media_info", summary="Inspect media metadata", action="media_info", risk="safe", confidence=0.9)
+        if any(word in low for word in ("export audit", "download audit log", "export moderation history")):
+            return Plan(intent="export_audit", summary="Export the group audit log", action="export_audit", risk="dangerous", requires_confirmation=True, confidence=0.9)
         if any(word in low for word in ("stream this", "make a streaming link", "direct link for this file")):
             return Plan(intent="stream_link", summary="Create an expiring streaming link", action="stream_link", risk="risky", requires_confirmation=True, confidence=0.9)
         if any(word in low for word in ("auto rename", "automatically rename", "rename uploads")):
-            return Plan(intent="set_auto_rename", summary="Configure automatic file renaming", action="set_auto_rename", risk="risky", requires_confirmation=True, args={"enabled": not any(word in low for word in ("disable", "off", "stop"))}, confidence=0.85)
+            enabled = not any(word in low for word in ("disable", "off", "stop"))
+            template_match = re.search(r"(?:using\s+template\s*[:=]?\s*|template\s*[:=]?\s*|format\s*[:=]?\s*|using\s+)([\"']?)(.+?)\1$", value, re.I)
+            template = template_match.group(2).strip() if template_match else ""
+            return Plan(intent="set_auto_rename", summary="Configure automatic file renaming", action="set_auto_rename", risk="risky", requires_confirmation=True, args={"enabled": enabled, "template": template}, confidence=0.85)
         if any(word in low for word in ("list filters", "show filters")):
             return Plan(intent="list_filters", summary="List group filters", action="list_filters", risk="safe", confidence=0.9)
         if any(word in low for word in ("list locks", "show locks")):

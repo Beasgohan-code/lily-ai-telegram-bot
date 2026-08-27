@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
 from .config import settings
+from .db import db
 
 
 class WebSearch:
@@ -47,16 +48,13 @@ class WebSearch:
 
 
 class StreamLinks:
-    def __init__(self) -> None:
-        self._files: dict[str, tuple[Path, int, int]] = {}
-
     def _secret(self) -> bytes:
         secret = settings.stream_signing_secret or settings.bot_token
         if not secret:
             raise RuntimeError("Configure LILY_STREAM_SIGNING_SECRET or TELEGRAM_BOT_TOKEN first")
         return secret.encode()
 
-    def create(self, path: Path, owner_id: int) -> str:
+    async def create(self, path: Path, owner_id: int) -> str:
         path = path.resolve()
         allowed_roots = [settings.work_dir.resolve(), settings.download_dir.resolve()]
         if not any(path == root or root in path.parents for root in allowed_roots):
@@ -68,25 +66,27 @@ class StreamLinks:
         payload = f"{owner_id}.{expires}.{nonce}"
         signature = hmac.new(self._secret(), payload.encode(), hashlib.sha256).hexdigest()[:32]
         token = f"{payload}.{signature}"
-        self._files[token] = (path, int(owner_id), expires)
+        await db.save_stream_link(token, str(path), int(owner_id), expires)
         if not settings.stream_public_base_url:
             raise RuntimeError("Configure LILY_STREAM_PUBLIC_BASE_URL to generate public links.")
         return f"{settings.stream_public_base_url}/stream/{token}"
 
-    def resolve(self, token: str) -> Path:
-        record = self._files.get(token)
+    async def resolve(self, token: str) -> Path:
+        record = await db.get_stream_link(token)
         if not record:
             raise KeyError(token)
-        path, _owner_id, expires = record
+        path = Path(str(record["path"])).resolve()
+        expires = int(record["expires_at"])
         if expires < int(time.time()):
-            self._files.pop(token, None)
+            await db.delete_stream_link(token)
             raise KeyError(token)
         parts = token.split(".")
         if len(parts) != 4:
             raise KeyError(token)
         payload = ".".join(parts[:3])
         expected = hmac.new(self._secret(), payload.encode(), hashlib.sha256).hexdigest()[:32]
-        if not hmac.compare_digest(parts[3], expected) or not path.exists():
+        allowed_roots = [settings.work_dir.resolve(), settings.download_dir.resolve()]
+        if not hmac.compare_digest(parts[3], expected) or not path.exists() or not any(path == root or root in path.parents for root in allowed_roots):
             raise KeyError(token)
         return path
 
@@ -96,7 +96,7 @@ class StreamLinks:
         @app.get("/stream/{token}")
         async def stream(token: str):
             try:
-                path = self.resolve(token)
+                path = await self.resolve(token)
             except KeyError:
                 raise HTTPException(status_code=404, detail="Link expired or not found")
             return FileResponse(path, filename=path.name)
@@ -106,6 +106,17 @@ class StreamLinks:
             return {"ok": True, "service": "lily-stream"}
 
         return app
+
+
+def create_app() -> FastAPI:
+    app = stream_links.app()
+
+    @app.on_event("startup")
+    async def startup() -> None:
+        settings.prepare()
+        await db.init()
+
+    return app
 
 
 web_search = WebSearch()

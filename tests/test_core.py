@@ -76,15 +76,20 @@ class LilyCoreTests(unittest.TestCase):
         self.assertEqual(plan.args["user_id"], 123456789)
 
     def test_signed_stream_link_resolves_lily_managed_file(self):
-        updated_settings = replace(settings, stream_public_base_url="https://lily.example.test", stream_signing_secret="test-signing-secret")
-        path = settings.work_dir / "stream_test.bin"
-        with patch.object(web_media, "settings", updated_settings):
-            settings.work_dir.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b"lily")
-            link = stream_links.create(path, 99)
-            token = link.rsplit("/", 1)[-1]
-            self.assertEqual(stream_links.resolve(token), path.resolve())
-        path.unlink(missing_ok=True)
+        async def run():
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                updated_settings = replace(settings, stream_public_base_url="https://lily.example.test", stream_signing_secret="test-signing-secret", work_dir=root / "work", download_dir=root / "downloads")
+                database = Database(str(root / "lily.sqlite3"))
+                with patch.object(web_media, "settings", updated_settings), patch.object(web_media, "db", database):
+                    await database.init()
+                    updated_settings.work_dir.mkdir(parents=True, exist_ok=True)
+                    path = updated_settings.work_dir / "stream_test.bin"
+                    path.write_bytes(b"lily")
+                    link = await stream_links.create(path, 99)
+                    token = link.rsplit("/", 1)[-1]
+                    self.assertEqual(await stream_links.resolve(token), path.resolve())
+        asyncio.run(run())
 
     def test_moderation_state_and_post_search_persist(self):
         async def run():
@@ -196,6 +201,17 @@ class LilyCoreTests(unittest.TestCase):
         self.assertEqual(goodbye.action, "set_goodbye")
         case_note = client.heuristic_plan("Lily add a case note for report 7 saying review next incident", {"chat_type": "group", "reply": {}})
         self.assertEqual(case_note.action, "add_case_note")
+
+    def test_heuristic_router_understands_media_and_audit_tools(self):
+        client = AIClient()
+        media = client.heuristic_plan("Lily show file details for this video", {"chat_type": "group", "reply": {}})
+        self.assertEqual(media.action, "media_info")
+        audit = client.heuristic_plan("Lily export moderation history", {"chat_type": "group", "reply": {}})
+        self.assertEqual(audit.action, "export_audit")
+        self.assertTrue(audit.requires_confirmation)
+        rename = client.heuristic_plan("Lily rename uploads using template {title} - {quality}.{ext}", {"chat_type": "group", "reply": {}})
+        self.assertEqual(rename.action, "set_auto_rename")
+        self.assertEqual(rename.args["template"], "{title} - {quality}.{ext}")
 
     def test_heuristic_router_understands_production_upgrade_actions(self):
         client = AIClient()

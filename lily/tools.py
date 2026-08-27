@@ -94,6 +94,25 @@ class LilyTools:
             input_path.unlink(missing_ok=True)
             return target
 
+    async def media_info(self, ctx: ToolContext) -> dict:
+        async with self.sem:
+            source = ctx.update.effective_message.reply_to_message if ctx.update.effective_message.reply_to_message else ctx.update.effective_message
+            meta = ctx.source_file or source_file_from_message(source)
+            if not meta:
+                raise ValueError("Reply to a media file so Lily can inspect it.")
+            input_path = settings.work_dir / f"info_{ctx.update.update_id}_{safe_filename(meta['file_name'])}"
+            await self._download_telegram_file(ctx, input_path)
+            command = ["ffprobe", "-v", "error", "-show_entries", "format=duration,size,format_name:stream=index,codec_type,codec_name,width,height,bit_rate", "-of", "json", str(input_path)]
+            process = await asyncio.create_subprocess_exec(*command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stdout, stderr = await process.communicate()
+            input_path.unlink(missing_ok=True)
+            if process.returncode != 0:
+                raise RuntimeError(stderr.decode(errors="replace")[-1000:] or "FFprobe failed")
+            try:
+                return json.loads(stdout.decode("utf-8"))
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("FFprobe returned invalid metadata.") from exc
+
     async def compress_file(self, ctx: ToolContext, fmt: str = "zip") -> Path:
         async with self.sem:
             source_name = safe_filename("source.bin")

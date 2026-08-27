@@ -60,6 +60,7 @@ class Settings:
     stream_link_ttl_seconds: int = field(default_factory=lambda: _int("LILY_STREAM_LINK_TTL", 3600))
     stream_bind_host: str = field(default_factory=lambda: os.getenv("LILY_STREAM_BIND_HOST", "127.0.0.1"))
     stream_port: int = field(default_factory=lambda: _int("LILY_STREAM_PORT", 8090))
+    stream_embedded: bool = field(default_factory=lambda: _bool("LILY_STREAM_EMBEDDED", True))
     web_search_max_results: int = field(default_factory=lambda: _int("LILY_WEB_SEARCH_MAX_RESULTS", 5))
     custom_emoji_id: str = field(default_factory=lambda: os.getenv("LILY_CUSTOM_EMOJI_ID", ""))
     web_search_url: str = field(default_factory=lambda: os.getenv("LILY_WEB_SEARCH_URL", "https://api.duckduckgo.com/"))

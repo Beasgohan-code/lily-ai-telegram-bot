@@ -211,6 +211,14 @@ class Database:
                     verified_at INTEGER,
                     PRIMARY KEY(chat_id, user_id)
                 );
+                CREATE TABLE IF NOT EXISTS stream_links (
+                    token TEXT PRIMARY KEY,
+                    path TEXT NOT NULL,
+                    owner_id INTEGER NOT NULL,
+                    expires_at INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_stream_links_expires_at ON stream_links(expires_at);
                 """
             )
             await db.commit()
@@ -359,6 +367,25 @@ class Database:
                 (chat_id, limit),
             )).fetchall()
             return [dict(row) for row in rows]
+
+    async def save_stream_link(self, token: str, path: str, owner_id: int, expires_at: int) -> None:
+        async with self.connect() as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO stream_links(token,path,owner_id,expires_at,created_at) VALUES(?,?,?,?,?)",
+                (token, path, owner_id, expires_at, int(time.time())),
+            )
+            await db.execute("DELETE FROM stream_links WHERE expires_at<?", (int(time.time()),))
+            await db.commit()
+
+    async def get_stream_link(self, token: str) -> dict[str, Any] | None:
+        async with self.connect() as db:
+            row = await (await db.execute("SELECT * FROM stream_links WHERE token=?", (token,))).fetchone()
+            return dict(row) if row else None
+
+    async def delete_stream_link(self, token: str) -> None:
+        async with self.connect() as db:
+            await db.execute("DELETE FROM stream_links WHERE token=?", (token,))
+            await db.commit()
 
     async def clear_warnings(self, chat_id: int, user_id: int) -> int:
         async with self.connect() as db:
