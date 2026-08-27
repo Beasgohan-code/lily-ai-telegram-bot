@@ -59,6 +59,69 @@ class LilyCoreTests(unittest.TestCase):
         buttons = next(block for block in blocks if block["type"] == "buttons")
         self.assertEqual(buttons["buttons"][0]["style"], "primary")
 
+    def test_post_blocks_sanitize_untrusted_links_and_trim_fields(self):
+        blocks = ChannelPostService().announcement_blocks({
+            "title": "Dragon Ball " * 80,
+            "type": "TV",
+            "genres": "Action " * 100,
+            "plot": "A safe synopsis.",
+            "site_url": "javascript:alert('bad')",
+            "anilist_id": 20,
+        })
+        title = blocks[0]["text"][0]["text"]
+        buttons = next(block for block in blocks if block["type"] == "buttons")["buttons"]
+        self.assertLessEqual(len(title), 180)
+        self.assertEqual(buttons[0]["url"], "https://anilist.co/anime/20")
+        self.assertEqual(buttons[1]["style"], "secondary")
+
+    def test_post_lookup_normalizes_filenames_and_caches_metadata(self):
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"data": {"Page": {"media": [{
+                    "id": 20,
+                    "title": {"english": "Dragon Ball", "romaji": None, "native": None},
+                    "format": "TV",
+                    "averageScore": 85,
+                    "meanScore": None,
+                    "status": "FINISHED",
+                    "episodes": 153,
+                    "genres": ["Action"],
+                    "description": "A &amp; B",
+                    "coverImage": {"large": "https://example.test/cover.jpg"},
+                    "siteUrl": "https://anilist.co/anime/20/Dragon-Ball/",
+                    "nextAiringEpisode": None,
+                    "studios": {"nodes": []},
+                }]}}}
+
+        class Client:
+            calls = 0
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def post(self, *_args, **_kwargs):
+                self.calls += 1
+                return Response()
+
+        async def run():
+            client = Client()
+            service = ChannelPostService()
+            with patch("lily.postbot.httpx.AsyncClient", return_value=client):
+                first = await service.lookup_anime("Dragon.Ball.S01E01.1080p.mkv")
+                second = await service.lookup_anime("Dragon.Ball.S01E01.1080p.mkv")
+            self.assertEqual(client.calls, 1)
+            self.assertEqual(first["title"], "Dragon Ball")
+            self.assertEqual(first["plot"], "A & B")
+            self.assertEqual(second["site_url"], "https://anilist.co/anime/20/Dragon-Ball/")
+
+        asyncio.run(run())
+
     def test_fallback_provider_configuration_is_supported(self):
         from lily.config import Settings
         configured = Settings()

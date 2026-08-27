@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import copy
 import hashlib
+import html
 import re
+import time
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -36,60 +40,127 @@ query ($search: String) {
 }
 """
 
+_METADATA_CACHE_SECONDS = 600
+_MAX_CACHE_ENTRIES = 128
+
+
+def _short_text(value: Any, fallback: str, limit: int) -> str:
+    cleaned = re.sub(r"\s+", " ", str(value or "")).replace("\x00", " ").strip()
+    if not cleaned:
+        return fallback
+    if len(cleaned) <= limit:
+        return cleaned
+    return f"{cleaned[: limit - 1].rsplit(' ', 1)[0].rstrip()}…"
+
+
+def _safe_anilist_url(value: Any, anilist_id: Any) -> str:
+    candidate = str(value or "").strip()
+    parsed = urlsplit(candidate)
+    if parsed.scheme == "https" and (parsed.netloc == "anilist.co" or parsed.netloc.endswith(".anilist.co")):
+        return candidate
+    if str(anilist_id or "").isdigit():
+        return f"https://anilist.co/anime/{anilist_id}"
+    return "https://anilist.co/search/anime"
+
 
 class ChannelPostService:
+    def __init__(self, metadata_cache_seconds: int = _METADATA_CACHE_SECONDS) -> None:
+        self.metadata_cache_seconds = max(0, metadata_cache_seconds)
+        self._metadata_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+    @staticmethod
+    def _title_candidates(title: str) -> list[str]:
+        raw = _short_text(title, "", 240)
+        if not raw:
+            raise ValueError("Tell Lily the anime title to look up.")
+        without_extension = re.sub(r"\.(?:mkv|mp4|avi|webm|m4v)$", "", raw, flags=re.IGNORECASE)
+        readable = re.sub(r"[._]+", " ", without_extension).strip()
+        simplified = re.split(r"\s{2,}|\s+-\s+|:\s+|\s+\[", readable, maxsplit=1)[0].strip()
+        release_clean = re.split(r"\s+(?:S\d{1,2}E\d{1,3}|E\d{1,3}|EP\d{1,3}|\d{3,4}p|WEB[- ]?DL|BLURAY|HEVC|X26[45])\b", readable, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+        return list(dict.fromkeys(item for item in (raw, readable, simplified, release_clean) if item))
+
+    def _cache_key(self, title: str) -> str:
+        return re.sub(r"\s+", " ", title).strip().lower()
+
+    def _cached_metadata(self, key: str) -> dict[str, Any] | None:
+        cached = self._metadata_cache.get(key)
+        if not cached or time.monotonic() - cached[0] >= self.metadata_cache_seconds:
+            self._metadata_cache.pop(key, None)
+            return None
+        return copy.deepcopy(cached[1])
+
+    def _store_metadata(self, key: str, anime: dict[str, Any]) -> None:
+        if not self.metadata_cache_seconds:
+            return
+        if len(self._metadata_cache) >= _MAX_CACHE_ENTRIES:
+            oldest = min(self._metadata_cache, key=lambda item: self._metadata_cache[item][0])
+            self._metadata_cache.pop(oldest, None)
+        self._metadata_cache[key] = (time.monotonic(), copy.deepcopy(anime))
+
     async def lookup_anime(self, title: str) -> dict[str, Any]:
-        # Try the full title first, then the common cleaned-title variants used by anime filenames.
-        candidates = [title.strip()]
-        simplified = re.split(r"\s{2,}|\s+-\s+|:\s+|\s+\[", title, maxsplit=1)[0].strip()
-        if simplified and simplified.lower() != title.strip().lower():
-            candidates.append(simplified)
+        # Retry safe title variants because media filenames often contain release metadata.
+        candidates = self._title_candidates(title)
+        cache_key = self._cache_key(candidates[0])
+        cached = self._cached_metadata(cache_key)
+        if cached:
+            return cached
         item = None
-        async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=8.0)) as client:
+        had_service_error = False
+        async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=8.0), headers={"User-Agent": "LilyTelegramBot/1.0"}) as client:
             for candidate in candidates:
-                response = await client.post("https://graphql.anilist.co", json={"query": ANIME_QUERY, "variables": {"search": candidate}})
-                response.raise_for_status()
-                data = response.json()
+                try:
+                    response = await client.post("https://graphql.anilist.co", json={"query": ANIME_QUERY, "variables": {"search": candidate}})
+                    response.raise_for_status()
+                    data = response.json()
+                except (httpx.HTTPError, ValueError):
+                    had_service_error = True
+                    continue
                 entries = data.get("data", {}).get("Page", {}).get("media", [])
                 if entries:
                     item = entries[0]
                     break
         if not item:
+            if had_service_error:
+                raise ValueError("Anime metadata is temporarily unavailable. Please retry or provide the post details manually.")
             raise ValueError(f"I could not find anime metadata for {title!r}. Try another title or provide the fields manually.")
         title_data = item.get("title") or {}
-        plot = re.sub(r"<[^>]+>", "", item.get("description") or "No synopsis available.").strip()
+        plot = _short_text(html.unescape(re.sub(r"<[^>]+>", "", item.get("description") or "")), "No synopsis available.", 2500)
         next_episode = item.get("nextAiringEpisode") or {}
-        studios = ", ".join(node.get("name", "") for node in (item.get("studios", {}).get("nodes", []) or []) if node.get("name"))
-        return {
-            "title": title_data.get("english") or title_data.get("romaji") or title_data.get("native") or title,
-            "type": item.get("format") or item.get("type") or "TV",
+        studios = ", ".join(_short_text(node.get("name"), "", 80) for node in (item.get("studios", {}).get("nodes", []) or []) if node.get("name"))
+        anime = {
+            "title": _short_text(title_data.get("english") or title_data.get("romaji") or title_data.get("native") or candidates[0], "Anime announcement", 180),
+            "type": _short_text(item.get("format") or item.get("type"), "TV", 48),
             "rating": f"{(item.get('averageScore') or item.get('meanScore') or 0) / 10:.1f}/10" if (item.get("averageScore") or item.get("meanScore")) else "N/A",
-            "status": str(item.get("status") or "Unknown").replace("_", " ").title(),
-            "episodes": item.get("episodes") or (f"Next: {next_episode.get('episode')}" if next_episode.get("episode") else "Unknown"),
-            "genres": ", ".join(item.get("genres") or []) or "Unknown",
-            "plot": plot[:2500],
+            "status": _short_text(str(item.get("status") or "Unknown").replace("_", " ").title(), "Unknown", 48),
+            "episodes": _short_text(item.get("episodes") or (f"Next: {next_episode.get('episode')}" if next_episode.get("episode") else ""), "Unknown", 64),
+            "genres": _short_text(", ".join(str(genre) for genre in (item.get("genres") or [])), "Unknown", 400),
+            "plot": plot,
             "anilist_id": item.get("id"),
             "cover_url": (item.get("coverImage") or {}).get("large"),
-            "site_url": item.get("siteUrl"),
-            "studio": studios,
+            "site_url": _safe_anilist_url(item.get("siteUrl"), item.get("id")),
+            "studio": _short_text(studios, "", 300),
         }
+        self._store_metadata(cache_key, anime)
+        return copy.deepcopy(anime)
 
     def announcement_blocks(self, anime: dict[str, Any], include_buttons: bool = True) -> list[dict[str, Any]]:
+        title = _short_text(anime.get("title"), "Anime announcement", 180)
+        anilist_id = anime.get("anilist_id")
         blocks: list[dict[str, Any]] = [
-            paragraph([bold(anime.get("title", "Anime announcement"))]),
-            paragraph([bold("» Type: "), code(anime.get("type", "N/A"))]),
-            paragraph([bold("» Average Rating: "), code(anime.get("rating", "N/A"))]),
-            paragraph([bold("» Status: "), code(anime.get("status", "N/A"))]),
-            paragraph([bold("» Episodes: "), code(str(anime.get("episodes", "N/A")))]),
-            paragraph([bold("» Genre: "), anime.get("genres", "N/A")]),
-            expandable_quote(anime.get("plot", "No synopsis available."), "Synopsis"),
+            paragraph([bold(title)]),
+            paragraph([bold("» Type: "), code(_short_text(anime.get("type"), "N/A", 48))]),
+            paragraph([bold("» Average Rating: "), code(_short_text(anime.get("rating"), "N/A", 32))]),
+            paragraph([bold("» Status: "), code(_short_text(anime.get("status"), "N/A", 48))]),
+            paragraph([bold("» Episodes: "), code(_short_text(anime.get("episodes"), "N/A", 64))]),
+            paragraph([bold("» Genre: "), _short_text(anime.get("genres"), "N/A", 400)]),
+            expandable_quote(_short_text(anime.get("plot"), "No synopsis available.", 2500), "Synopsis"),
         ]
         if include_buttons:
             blocks.append({
                 "type": "buttons",
                 "buttons": [
-                    {"text": "More info", "style": "primary", "url": anime.get("site_url") or (f"https://anilist.co/anime/{anime.get('anilist_id')}" if anime.get("anilist_id") else "https://anilist.co/search/anime")},
-                    {"text": "Share", "style": "link", "switch_inline_query": anime.get("title", "")},
+                    {"text": "More info", "style": "primary", "url": _safe_anilist_url(anime.get("site_url"), anilist_id)},
+                    {"text": "Share", "style": "secondary", "switch_inline_query": title},
                 ],
                 "align": "center",
             })
