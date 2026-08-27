@@ -31,7 +31,7 @@ PRESETS: dict[str, dict[str, Any]] = {
     "z-ai": {"provider": "Z AI (Zhipu AI)", "env": "ZAI_API_KEY", "family": "openai", "tier": "hosted", "default": "glm-4.7-flash"},
     "cloudflare-workers-ai": {"provider": "Cloudflare Workers AI", "env": "CLOUDFLARE_AI_API_TOKEN", "account_env": "CLOUDFLARE_ACCOUNT_ID", "family": "cloudflare", "tier": "hosted", "default": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"},
     "groq": {"provider": "Groq", "env": "GROQ_API_KEY", "family": "openai", "tier": "hosted", "default": "openai/gpt-oss-20b"},
-    "huggingface": {"provider": "HUGGING_FACE", "env": "HF_TOKEN", "family": "openai", "tier": "hosted", "default": "meta-llama/Llama-3.1-8B-Instruct"},
+    "huggingface": {"provider": "Hugging Face", "env": "HF_TOKEN", "family": "openai", "tier": "hosted", "default": "meta-llama/Llama-3.1-8B-Instruct"},
     "kilo": {"provider": "Kilo Code", "env": "KILO_API_KEY", "family": "openai", "tier": "public", "default": "kilo-auto/free", "key_optional": True},
     "llm7": {"provider": "LLM7.io", "env": "LLM7_API_KEY", "family": "openai", "tier": "public", "default": "gpt-oss:20b", "key_optional": True},
     "modelscope": {"provider": "ModelScope", "env": "MODELSCOPE_API_KEY", "family": "openai", "tier": "hosted", "default": "Qwen/Qwen3.5-27B"},

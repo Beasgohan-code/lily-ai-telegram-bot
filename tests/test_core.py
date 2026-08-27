@@ -22,7 +22,7 @@ from lily.tools import safe_filename
 import lily.web_media as web_media
 from lily.web_media import stream_links
 from lily.config import settings
-from lily.free_models import CATALOG, PRESETS
+from lily.free_models import CATALOG, PRESETS, profiles_for_presets
 from lily.group_controls import GROUP_CONTROLS, GROUP_CONTROL_MAP
 from lily.bot_factory import BotFactoryError, EnvironmentWizard, ManagedBotFactory
 from lily.execution_workflow import visible_stages
@@ -254,7 +254,16 @@ class LilyCoreTests(unittest.TestCase):
         self.assertGreaterEqual(len(PRESETS), 17)
         self.assertIn("cohere", PRESETS)
         self.assertIn("cloudflare-workers-ai", PRESETS)
+        self.assertEqual(PRESETS["huggingface"]["provider"], "Hugging Face")
+        self.assertIn(PRESETS["huggingface"]["provider"], CATALOG)
         self.assertIn("ollama-local", PRESETS)
+
+    def test_huggingface_preset_resolves_catalog_endpoint(self):
+        with patch.dict("os.environ", {"HF_TOKEN": "test-token"}, clear=False):
+            profiles = profiles_for_presets(("huggingface",), include_all_models=False, allow_public=False)
+        self.assertEqual(len(profiles), 1)
+        self.assertEqual(profiles[0]["base_url"], "https://router.huggingface.co/v1")
+        self.assertEqual(profiles[0]["model"], "meta-llama/Llama-3.1-8B-Instruct")
 
     def test_requested_fallback_tier_order_is_enforced(self):
         from lily.config import Settings

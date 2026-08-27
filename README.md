@@ -14,8 +14,6 @@ The audio downloader intentionally does **not** scrape or rip streaming platform
 
 Mira-style external integrations, proactive reminders, image generation, deep web research, and advanced memory retrieval are represented as safe router actions and extension points, but they require provider-specific connectors. The core intentionally refuses to claim that such an action completed until an integration is implemented. Lily’s built-in post search indexes posts that Lily publishes itself; searching arbitrary historical channel messages requires an additional authorized Telegram user-session connector and is intentionally not enabled by default.
 
-The supplied Auto-Rename, AniwatchTvdl, ENCODING-BOT, FileToLink, LLM retrieval, and Post-Search-Bot repositories informed Lily’s filename/caption patterns, AniList fallback lookup, FFmpeg settings, progress queues, document retrieval concepts, and indexed search. Their code was not blindly merged: the provided repositories include different copyleft or missing-license conditions, so Lily contains independently implemented compatible logic. In particular, host-bypass download utilities and arbitrary shell-execution patterns were excluded.
-
 The new Telegram rich-message methods are called through raw HTTP. This is deliberate: as of the current documentation review, the stable PTB API has local-server support, but the upstream rich-message typed support was still tracked separately. Lily sends RichMessage blocks directly and falls back to HTML `sendMessage` if the local Bot API server does not support RichMessage yet.
 
 ## Install
