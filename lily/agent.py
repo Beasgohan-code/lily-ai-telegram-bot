@@ -17,7 +17,7 @@ ACTIONS = {
     "ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "restrict_user", "unrestrict_user", "demote_user", "promote_user", "delete_message", "purge_messages", "report_user",
     "warn_user", "pin_message", "unpin_message", "set_group_rules", "show_group_rules", "set_welcome", "set_goodbye", "set_verification", "welcome_member",
     "rename_file", "compress_file", "encode_media", "create_file", "create_code_project", "code_project_status", "cancel_code_project",
-    "download_song", "generate_image", "generate_video", "create_poll", "remember", "forget_memory", "explain_message",
+    "download_song", "generate_image", "generate_video", "generate_speech", "create_poll", "remember", "forget_memory", "explain_message",
     "start_channel_post", "publish_channel_post", "delete_last_post",
     "add_filter", "remove_filter", "set_lock", "save_note", "list_notes", "search_posts", "show_warnings",
     "plugin_reply", "model_status", "queue_status", "queue_list", "cancel_queue_job", "web_search", "stream_link", "set_auto_rename", "list_filters", "list_locks",
@@ -35,7 +35,7 @@ RISK = {"safe", "risky", "dangerous"}
 RISK_LEVEL = {"safe": 0, "risky": 1, "dangerous": 2}
 ACTION_MIN_RISK = {
     "ban_user": "dangerous", "kick_user": "dangerous", "mute_user": "dangerous", "restrict_user": "dangerous", "delete_message": "dangerous", "purge_messages": "dangerous",
-    "set_chat_title": "dangerous", "set_chat_description": "dangerous", "forget_memory": "risky", "set_group_default_permissions": "dangerous", "create_invite_link": "dangerous", "revoke_invite_link": "dangerous", "create_forum_topic": "dangerous", "close_forum_topic": "dangerous", "reopen_forum_topic": "dangerous", "delete_forum_topic": "dangerous",
+    "set_chat_title": "dangerous", "set_chat_description": "dangerous", "forget_memory": "risky", "generate_speech": "risky", "set_group_default_permissions": "dangerous", "create_invite_link": "dangerous", "revoke_invite_link": "dangerous", "create_forum_topic": "dangerous", "close_forum_topic": "dangerous", "reopen_forum_topic": "dangerous", "delete_forum_topic": "dangerous",
 }
 CONFIRM_ACTIONS = {action for action, risk in ACTION_MIN_RISK.items() if risk != "safe"} | {"download_song", "download_chapter", "register_managed_project", "provision_managed_project", "create_poll", "set_auto_rename", "track_series", "update_tracked_series"}
 TARGET_ACTIONS = {"ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "restrict_user", "unrestrict_user", "demote_user", "promote_user", "warn_user", "member_profile", "show_warnings"}
@@ -75,6 +75,8 @@ class Plan:
             self.missing = list(dict.fromkeys([*self.missing, "Reply inside the forum topic or provide its numeric message thread ID"]))[:8]
         if self.action == "revoke_invite_link" and not str(self.args.get("invite_link") or "").strip():
             self.missing = list(dict.fromkeys([*self.missing, "Provide the invite link Lily should revoke"]))[:8]
+        if self.action == "generate_speech" and not str(self.args.get("text") or "").strip():
+            self.missing = list(dict.fromkeys([*self.missing, "Provide the text Lily should speak"]))[:8]
         return self
 
     @classmethod
@@ -284,6 +286,10 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
         if any(word in low for word in ("search the web", "web search", "look this up", "search online")):
             query = re.sub(r"^(.*?)(search the web|web search|look this up|search online)[: ]*", "", value, flags=re.I).strip() or value
             return Plan(intent="web_search", summary="Search the web", action="web_search", risk="safe", args={"query": query}, confidence=0.9)
+        if any(phrase in low for phrase in ("text to speech", "generate speech", "make speech", "read aloud", "say this aloud", "voice this text")):
+            script = re.sub(r"^.*?(?:text to speech|generate speech|make speech|read aloud|say this aloud|voice this text)\s*[:,-]?\s*", "", value, flags=re.I).strip()
+            voice_match = re.search(r"\bvoice\s+(Zephyr|Puck|Charon|Kore|Fenrir|Leda|Orus|Aoede|Callirrhoe|Autonoe|Enceladus|Iapetus|Umbriel|Algieba|Despina|Erinome|Algenib|Rasalgethi|Laomedeia|Achernar|Alnilam|Schedar|Gacrux|Pulcherrima|Achird|Zubenelgenubi|Vindemiatrix|Sadachbia|Sadaltager|Sulafat)\b", value, re.I)
+            return Plan(intent="generate_speech", summary="Generate a spoken audio version of the provided text", action="generate_speech", risk="risky", requires_confirmation=True, args={"text": script[:settings.speech_max_chars], "voice": voice_match.group(1).title() if voice_match else settings.speech_voice, "language_code": "en-US"}, missing=[] if script else ["Provide the text Lily should speak"], confidence=0.85).enforce_safety()
         if any(word in low for word in ("generate an image", "create an image", "make an image", "draw an image")):
             return Plan(intent="generate_image", summary="Generate an image", action="generate_image", risk="risky", requires_confirmation=True, args={"prompt": value}, confidence=0.85)
         if any(word in low for word in ("generate a video", "create a video", "make a video")):

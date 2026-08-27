@@ -80,9 +80,11 @@ For streaming, reply to a Lily-managed file and ask for a direct streaming link.
 
 For web search, Lily uses the configured search endpoint and returns rich result tables plus expandable snippets. The default is DuckDuckGo’s Instant Answer endpoint; configure an alternative compatible provider if you need broader coverage.
 
-## Image and video generation
+## Image, video, and text-to-speech generation
 
 Lily has provider-neutral image and video generation adapters. Set `LILY_IMAGE_GENERATION_URL` or `LILY_VIDEO_GENERATION_URL` and the matching API key for an authorized provider. Each endpoint receives a `prompt`, `aspect_ratio`, and `kind`; video requests also receive `duration_seconds`. The provider must return a top-level `url`, `output_url`, `image_url`, or `video_url` (or an equivalent first item under `data`/`outputs`). Lily asks for confirmation before a generation request so configured providers are not used accidentally.
+
+For spoken audio, set `LILY_SPEECH_GENERATION_URL` and `LILY_SPEECH_GENERATION_API_KEY`. Lily accepts a user request such as `Lily, read aloud: Welcome to the community, voice Kore`, limits its script with `LILY_SPEECH_MAX_CHARS` (default 1,800), requires confirmation, and accepts only the documented built-in voice names. The configured provider receives a structured `{kind: "speech", text, voice, language_code}` request and must return `audio_url`, `url`, or `output_url`. Lily does not silently send text to an unconfigured or anonymous voice provider. The Mini App’s **Read preview** button is separate: it uses the visitor’s device-local speech capability only after a click and speaks only the already-public plan summary.
 
 ## Agent CLI
 
@@ -98,9 +100,11 @@ The CLI uses Lily’s configured multi-model fallback router and prints either m
 
 ## Telegram Mini App
 
-The optional `lily-miniapp/` project is a polished Telegram Web App dashboard for live agent activity, moderation controls, skills, media queues, search, and channel-post preparation. Lily now includes a server-side FastAPI bridge for this dashboard. The bridge validates the raw Telegram `initData` HMAC with the bot token, applies a bounded auth timestamp, and returns only the authenticated user’s code-project jobs and managed-project summaries. It also supports requester-scoped cancellation for active code-project jobs.
+The `lily-miniapp/` project is a liquid-glass Telegram Web App control room with a Three.js ambient signal layer, restrained Anime.js reveal motion, accessible icon controls, a device-local **Read preview** control, live requester-scoped project/service data, and safe AI plan previews. Its public plan surface is deliberately non-executing: approvals and all action execution remain in Telegram.
 
-The bridge remains **disabled by default**. Before activation, set `LILY_ENABLE_MINIAPP_BRIDGE=true`, set `LILY_MINIAPP_ALLOWED_ORIGINS` to the exact HTTPS Mini App origin, and deploy the FastAPI service behind HTTPS. The existing static Mini App is not yet connected to a production Lily API URL; configure that client connection only after the server is deployed. Never trust Mini App client input without server-side `initData` validation.
+Lily includes a server-side FastAPI bridge for this dashboard. The bridge validates the raw Telegram `initData` HMAC with the bot token, applies a bounded auth timestamp, and returns only the authenticated user’s code-project jobs, managed-project summaries, model availability, and safety-enforced AI previews. It never returns plan arguments, provider errors, credentials, private role memos, raw tool calls, or model reasoning. The Mini App server relay accepts only three allow-listed API paths and keeps the configured Lily API base URL out of browser code.
+
+The bridge remains **disabled by default**. Before activation, deploy the FastAPI bridge behind HTTPS; set `LILY_ENABLE_MINIAPP_BRIDGE=true`; set `LILY_MINIAPP_ALLOWED_ORIGINS` to the exact HTTPS Mini App origin; and set `LILY_API_BASE_URL` in the Mini App server environment to the bridge’s public HTTPS URL. Then register the dashboard URL in BotFather and open Lily from Telegram. Browser testing outside Telegram correctly displays an authentication-required state; no production bridge URL is included in this repository.
 
 ## Durable code-project jobs and managed service supervision
 

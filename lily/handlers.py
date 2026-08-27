@@ -757,6 +757,11 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         url = await media_generation.video(str(plan.args.get("prompt") or plan.summary), str(plan.args.get("aspect_ratio") or "16:9"), int(plan.args.get("duration_seconds") or 8))
         await rich.send(chat_id, [heading("Video ready", 2), paragraph("Lily generated a video from your brief."), blockquote(url, "Output link")])
         return f"Generated video: {url}"
+    if action == "generate_speech":
+        await progress_message(update, "Creating your spoken audio with the configured text-to-speech provider…")
+        url = await media_generation.speech(str(plan.args.get("text") or ""), str(plan.args.get("voice") or settings.speech_voice), str(plan.args.get("language_code") or "en-US"))
+        await rich.send(chat_id, [heading("Spoken audio ready", 2), paragraph("Lily generated a spoken audio file from your approved text."), blockquote(url, "Output link")])
+        return f"Generated spoken audio: {url}"
     if action == "media_info":
         async def info_progress(value: str) -> None:
             await progress_message(update, value)

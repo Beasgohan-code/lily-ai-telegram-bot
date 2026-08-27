@@ -26,7 +26,7 @@ from lily.code_workspace import CodeWorkspace
 from lily.skill_engine import select_skill
 from lily.service_supervisor import ManagedServiceSupervisor, ProcessResult, SupervisorError
 from lily.agent_roles import assign_roles, catalog as agent_role_catalog, catalog_summary
-from lily.miniapp_bridge import MiniAppAuthError, validate_init_data
+from lily.miniapp_bridge import MiniAppAuthError, public_miniapp_plan, public_model_status, validate_init_data
 from lily.model_router import ModelProfile, ModelRouter
 from lily.plugin_manager import plugin_manager
 from lily.db import Database
@@ -45,6 +45,7 @@ from lily.knowledge_library import catalog as knowledge_catalog, read_skill
 from lily.mangadex import MangaDexClient, MangaDexError
 from lily.messaging import split_for_telegram
 from lily.handlers import execute_plan
+from lily.media_generation import MediaGeneration, TTS_VOICES
 
 
 class LilyCoreTests(unittest.TestCase):
@@ -152,6 +153,29 @@ class LilyCoreTests(unittest.TestCase):
         cancellation = AIClient().heuristic_plan("cancel code project abcdef123456", {"reply": {}})
         self.assertEqual(cancellation.action, "cancel_code_project")
         self.assertTrue(cancellation.requires_confirmation)
+
+    def test_text_to_speech_is_bounded_confirmed_and_voice_validated(self):
+        plan = AIClient().heuristic_plan("Lily read aloud: Welcome to the community, voice Kore", {"chat_type": "private", "reply": {}})
+        self.assertEqual(plan.action, "generate_speech")
+        self.assertTrue(plan.requires_confirmation)
+        self.assertEqual(plan.risk, "risky")
+        self.assertEqual(plan.args["voice"], "Kore")
+        self.assertEqual(assign_roles(plan).primary.slug, "media-engineer")
+        unsafe = Plan.from_dict({"action": "generate_speech", "risk": "safe", "requires_confirmation": False, "args": {"text": "Hello"}})
+        self.assertEqual(unsafe.risk, "risky")
+        self.assertTrue(unsafe.requires_confirmation)
+
+        async def run():
+            service = MediaGeneration()
+            configured = replace(settings, speech_generation_url="https://speech.example.test/v1", speech_generation_api_key="speech-test-key", speech_max_chars=100)
+            with patch("lily.media_generation.settings", configured), patch.object(service, "_request", new=AsyncMock(return_value="https://speech.example.test/output.ogg")) as request:
+                output = await service.speech("  Hello   Lily  ", "Kore", "en-US")
+                self.assertEqual(output, "https://speech.example.test/output.ogg")
+                request.assert_awaited_once_with("https://speech.example.test/v1", "speech-test-key", {"kind": "speech", "text": "Hello Lily", "voice": "Kore", "language_code": "en-US"})
+                with self.assertRaises(ValueError):
+                    await service.speech("Hello", "Unapproved voice")
+        asyncio.run(run())
+        self.assertIn("Kore", TTS_VOICES)
 
     def test_role_catalog_assigns_specialists_without_bypassing_safety(self):
         self.assertGreaterEqual(len(agent_role_catalog()), 200)
@@ -456,6 +480,27 @@ class LilyCoreTests(unittest.TestCase):
                 job = await database.get_code_project_job(job_id, 101, 77)
                 self.assertEqual(job["state"], "cancelled")
         asyncio.run(run())
+
+    def test_miniapp_public_ai_payload_omits_arguments_memos_and_provider_errors(self):
+        plan = Plan.from_dict({
+            "intent": "moderation",
+            "summary": "Review a group moderation request",
+            "action": "ban_user",
+            "risk": "safe",
+            "requires_confirmation": False,
+            "args": {"user_id": 123456, "token": "must-not-appear", "_agent_team": {"mode": "llm-reviewed", "reviewed_count": 1, "members": [{"role": "Safety Reviewer", "division": "assurance", "summary": "private memo"}]}},
+            "missing": [],
+        })
+        public = public_miniapp_plan(plan)
+        serialized = json.dumps(public)
+        self.assertEqual(public["risk"], "dangerous")
+        self.assertTrue(public["requires_confirmation"])
+        self.assertNotIn("user_id", serialized)
+        self.assertNotIn("must-not-appear", serialized)
+        self.assertNotIn("private memo", serialized)
+        self.assertEqual(public["team"]["roles"], [{"role": "Safety Reviewer", "division": "assurance"}])
+        models = public_model_status([{"name": "Free Router", "model": "small", "family": "openai", "privacy_tier": "private", "capabilities": ["chat"], "available": True, "api_key": "not-public", "last_error": "not-public"}])
+        self.assertEqual(models, [{"name": "Free Router", "model": "small", "family": "openai", "privacy_tier": "private", "capabilities": ["chat"], "available": True}])
 
     def test_managed_service_supervisor_is_allowlisted_owned_and_redacted(self):
         async def run():

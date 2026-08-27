@@ -117,7 +117,7 @@ _ACTION_ROLE = {
     "create_skill": "skill-steward", "list_skills": "skill-steward", "skill_status": "skill-steward",
     "queue_status": "queue-coordinator", "queue_list": "queue-coordinator", "cancel_queue_job": "queue-coordinator",
     "register_managed_project": "service-operator", "provision_managed_project": "service-operator", "project_env_schema": "service-operator", "project_run_profiles": "service-operator",
-    "generate_image": "channel-editor", "generate_video": "media-engineer", "create_file": "documentation-writer",
+    "generate_image": "channel-editor", "generate_video": "media-engineer", "generate_speech": "media-engineer", "create_file": "documentation-writer",
     "set_group_default_permissions": "community-moderator", "create_invite_link": "community-moderator", "revoke_invite_link": "community-moderator", "create_forum_topic": "community-moderator", "close_forum_topic": "community-moderator", "reopen_forum_topic": "community-moderator", "delete_forum_topic": "community-moderator", "list_administrators": "community-moderator", "group_member_count": "community-moderator",
 }
 

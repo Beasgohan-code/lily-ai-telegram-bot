@@ -16,6 +16,8 @@ from urllib.parse import parse_qsl
 
 from fastapi import HTTPException, Request
 
+from .agent import Plan, ai
+from .agent_team import public_team_summary
 from .config import Settings, settings
 from .db import Database, db
 
@@ -82,6 +84,36 @@ def _init_data(request: Request) -> str:
     return authorization[4:].strip() if authorization.lower().startswith("tma ") else ""
 
 
+def public_miniapp_plan(plan: Plan) -> dict[str, object]:
+    """Return only the Mini App-safe display of a centrally enforced plan."""
+    return {
+        "intent": str(plan.intent or "")[:200],
+        "summary": str(plan.summary or "")[:1000],
+        "action": str(plan.action or "none")[:80],
+        "risk": str(plan.risk or "safe")[:20],
+        "requires_confirmation": bool(plan.requires_confirmation),
+        "missing": [str(item)[:200] for item in plan.missing[:8]],
+        "team": public_team_summary(plan),
+        "execution": "Open Lily in Telegram to review and confirm any supported action.",
+    }
+
+
+def public_model_status(values: list[dict[str, Any]]) -> list[dict[str, object]]:
+    """Expose availability, not provider endpoints, error text, or credentials."""
+    return [
+        {
+            "name": str(value.get("name") or "AI model")[:100],
+            "model": str(value.get("model") or "")[:120],
+            "family": str(value.get("family") or "")[:60],
+            "privacy_tier": str(value.get("privacy_tier") or "")[:40],
+            "capabilities": [str(capability)[:40] for capability in value.get("capabilities", []) if isinstance(capability, str)][:12],
+            "available": bool(value.get("available")),
+        }
+        for value in values[:12]
+        if isinstance(value, dict)
+    ]
+
+
 def install_miniapp_routes(app: Any, database: Database = db, config: Settings = settings) -> None:
     """Attach minimal owner-scoped Mini App routes to Lily's existing FastAPI app."""
     async def user_from_request(request: Request) -> MiniAppUser:
@@ -106,11 +138,37 @@ def install_miniapp_routes(app: Any, database: Database = db, config: Settings =
         user = await user_from_request(request)
         jobs = await database.list_code_project_jobs_for_user(user.id, limit=20)
         projects = await database.list_managed_projects(user.id)
+        models = public_model_status(await ai.status())
         return {
             "user": user.public_dict(),
             "code_project_jobs": [{key: job[key] for key in ("job_id", "chat_id", "project", "language", "state", "stage", "artifact_name", "file_count", "created_at", "started_at", "finished_at") if key in job} for job in jobs],
             "managed_projects": [{key: project[key] for key in ("slug", "runtime", "run_profile", "state", "revision", "updated_at") if key in project} for project in projects],
+            "models": models,
+            "ai_mode": "free-first configured routing" if any(item["available"] for item in models) else "no available configured model",
         }
+
+    @app.post("/miniapp/v1/assistant/preview")
+    async def miniapp_assistant_preview(request: Request):
+        user = await user_from_request(request)
+        try:
+            payload = await request.json()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Provide a JSON request body.") from exc
+        text = str(payload.get("text") or "").strip() if isinstance(payload, dict) else ""
+        if not text:
+            raise HTTPException(status_code=400, detail="Enter a request for Lily.")
+        if len(text) > 3_500:
+            raise HTTPException(status_code=400, detail="Keep the request under 3,500 characters.")
+        try:
+            plan = await ai.team_plan(
+                text,
+                {"chat_type": "private", "reply": {}, "requester_id": user.id, "origin": "miniapp"},
+                [],
+                {},
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Lily AI is temporarily unavailable. Try again in Telegram shortly.") from exc
+        return {"plan": public_miniapp_plan(plan)}
 
     @app.post("/miniapp/v1/code-projects/{job_id}/cancel")
     async def cancel_code_project(job_id: str, request: Request):

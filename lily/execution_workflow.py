@@ -12,7 +12,7 @@ def visible_stages(action: str, risk: str, missing: list[str], requires_confirma
     if missing:
         return ["Understand the request", "Collect the missing details", "Validate the target and permissions", "Prepare a safe action plan"]
     stages = ["Understand the request", "Validate target, permissions, and capability gates"]
-    if action in {"rename_file", "compress_file", "encode_media", "media_info", "stream_link"}:
+    if action in {"rename_file", "compress_file", "encode_media", "media_info", "stream_link", "generate_speech"}:
         stages.append("Check the selected file and configured size limits")
     elif action == "create_code_project":
         stages.append("Create an isolated source workspace and validate its file boundaries")

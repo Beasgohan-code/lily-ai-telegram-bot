@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: lily-api-bridge
+    runtime: python
+    region: singapore
+    buildCommand: pip install --no-cache-dir -r requirements.txt
+    startCommand: uvicorn lily.web_media:create_app --factory --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    disk:
+      name: lily-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: LILY_ENABLE_MINIAPP_BRIDGE
+        value: "true"
+      - key: LILY_MINIAPP_ALLOWED_ORIGINS
+        sync: false
+      - key: LILY_DATABASE
+        value: /var/data/lily.sqlite3
+      - key: LILY_WORK_DIR
+        value: /var/data/work
+      - key: LILY_DOWNLOAD_DIR
+        value: /var/data/downloads
+      - key: LILY_PROJECTS_ROOT
+        value: /var/data/projects
+      - key: LILY_PROJECT_ENV_ROOT
+        value: /var/data/project-env
+      - key: LILY_STREAM_SIGNING_SECRET
+        sync: false
+      - key: TELEGRAM_LOCAL_MODE
+        value: "false"
+      - key: LILY_STREAM_EMBEDDED
+        value: "false"
+      - key: LILY_ENABLE_AGENT_TEAM
+        value: "false"
