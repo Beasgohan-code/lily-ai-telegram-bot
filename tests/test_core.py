@@ -351,6 +351,23 @@ class LilyCoreTests(unittest.TestCase):
         options = client.heuristic_plan("Lily show custom run command options", {"chat_type": "private", "reply": {}})
         self.assertEqual(options.action, "project_run_profiles")
 
+    def test_manual_series_tracker_persists_and_parses(self):
+        client = AIClient()
+        track = client.heuristic_plan("Lily track manhwa Solo Leveling at chapter 210", {"chat_type": "group", "reply": {}})
+        self.assertEqual(track.action, "track_series")
+        self.assertEqual(track.args["title"], "Solo Leveling")
+        self.assertEqual(track.args["last_chapter"], "210")
+        async def run():
+            with tempfile.TemporaryDirectory() as directory:
+                database = Database(str(Path(directory) / "series.sqlite3"))
+                await database.init()
+                item = await database.track_series(1, "Solo Leveling", "manhwa", 7, "210")
+                self.assertEqual(item["last_chapter"], "210")
+                changed = await database.update_tracked_series(1, "solo leveling", "211", 7)
+                self.assertEqual(changed["last_chapter"], "211")
+                self.assertEqual((await database.list_tracked_series(1))[0]["title"], "Solo Leveling")
+        asyncio.run(run())
+
 
 if __name__ == "__main__":
     unittest.main()

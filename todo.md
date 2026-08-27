@@ -41,3 +41,6 @@
 - [x] Add dry-run project provisioning plans and confirmation-gated registry actions before any clone, install, environment write, or service creation.
 - [x] Inspect the referenced bot-host project’s architecture, license, project registry, install, start/stop, environment, and log patterns before independent adaptation.
 - [x] Adapt only safe, compatible bot-runner workflow concepts into Lily: explicit project manifests, controlled lifecycle actions, redacted logs, and confirmation-gated operations.
+- [x] Inspect Beasgohan-code/Manhua-Bot for its license, architecture, content catalog, posting, search, queue, metadata, and deployment patterns without running its code.
+- [x] Reconcile every user-referenced repository into a license-aware capability matrix and independently implement only compatible high-value features in Lily.
+- [x] Implement an admin-managed, manual manga/manhwa/manhua release tracker with safe title normalization, chapter updates, listings, audit records, and no scraping or direct chapter downloads.

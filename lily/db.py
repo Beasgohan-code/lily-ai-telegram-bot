@@ -246,6 +246,21 @@ class Database:
                     PRIMARY KEY(project_slug, name),
                     FOREIGN KEY(project_slug) REFERENCES managed_projects(slug) ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS tracked_series (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    normalized_title TEXT NOT NULL,
+                    media_type TEXT NOT NULL DEFAULT 'manga',
+                    last_chapter TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'tracking',
+                    target_channel_id TEXT NOT NULL DEFAULT '',
+                    created_by INTEGER NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    UNIQUE(chat_id, normalized_title)
+                );
                 """
             )
             columns = {str(row["name"]) for row in await (await db.execute("PRAGMA table_info(managed_projects)")).fetchall()}
@@ -745,6 +760,42 @@ class Database:
         async with self.connect() as db:
             rows = await (await db.execute("SELECT * FROM managed_project_env WHERE project_slug=? ORDER BY name", (slug,))).fetchall()
             return [dict(row) for row in rows]
+
+    async def track_series(self, chat_id: int, title: str, media_type: str, created_by: int, last_chapter: str = "", target_channel_id: str = "") -> dict[str, Any]:
+        normalized = " ".join(title.lower().split())
+        now = int(time.time())
+        async with self.connect() as db:
+            await db.execute(
+                """INSERT INTO tracked_series(chat_id,title,normalized_title,media_type,last_chapter,target_channel_id,created_by,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(chat_id,normalized_title) DO UPDATE SET title=excluded.title,media_type=excluded.media_type,last_chapter=CASE WHEN excluded.last_chapter<>'' THEN excluded.last_chapter ELSE tracked_series.last_chapter END,target_channel_id=CASE WHEN excluded.target_channel_id<>'' THEN excluded.target_channel_id ELSE tracked_series.target_channel_id END,active=1,updated_at=excluded.updated_at""",
+                (chat_id, title[:200], normalized, media_type, last_chapter[:40], target_channel_id[:80], created_by, now, now),
+            )
+            await db.commit()
+            row = await (await db.execute("SELECT * FROM tracked_series WHERE chat_id=? AND normalized_title=?", (chat_id, normalized))).fetchone()
+            return dict(row)
+
+    async def list_tracked_series(self, chat_id: int, active_only: bool = True, limit: int = 50) -> list[dict[str, Any]]:
+        async with self.connect() as db:
+            query = "SELECT * FROM tracked_series WHERE chat_id=?"
+            values: tuple[Any, ...] = (chat_id,)
+            if active_only:
+                query += " AND active=1"
+            query += " ORDER BY updated_at DESC, title LIMIT ?"
+            rows = await (await db.execute(query, values + (max(1, min(limit, 100)),))).fetchall()
+            return [dict(row) for row in rows]
+
+    async def update_tracked_series(self, chat_id: int, title: str, last_chapter: str, actor_id: int, status: str = "tracking") -> dict[str, Any] | None:
+        normalized = " ".join(title.lower().split())
+        now = int(time.time())
+        async with self.connect() as db:
+            await db.execute(
+                "UPDATE tracked_series SET last_chapter=?, status=?, updated_at=? WHERE chat_id=? AND normalized_title=? AND active=1",
+                (last_chapter[:40], status[:40], now, chat_id, normalized),
+            )
+            await db.commit()
+            row = await (await db.execute("SELECT * FROM tracked_series WHERE chat_id=? AND normalized_title=?", (chat_id, normalized))).fetchone()
+            return dict(row) if row else None
 
 
 db = Database(settings.database_url)

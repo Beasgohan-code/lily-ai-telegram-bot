@@ -146,9 +146,16 @@ Lily, create a skill: when someone says “drop the link”, ask an admin before
 Lily, register bot manga-bot from https://github.com/example/manga-bot with python-main entrypoint bot.py.
 Lily, show custom run command options.
 Lily, provision bot manga-bot.
+Lily, track manhwa Solo Leveling at chapter 210.
+Lily, list tracked series.
+Lily, update Solo Leveling to chapter 211.
 ```
 
 The user should reply directly to a target message or file when Lily needs an unambiguous target. This prevents the AI from guessing which member or file the user meant.
+
+## Series release tracker
+
+Lily includes an admin-managed **manual release tracker** for manga, manhwa, and manhua titles. It can normalize titles, record a known chapter, list active tracked series, preserve an audit trail, and help prepare a channel announcement from confirmed information. The tracker intentionally does not scrape third-party sites, mirror protected chapter pages, or download copyrighted chapter files. Those activities need separate rights, source agreements, and compliance review.
 
 ## Security checklist
 

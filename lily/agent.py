@@ -22,6 +22,7 @@ ACTIONS = {
     "plugin_reply", "model_status", "queue_status", "queue_list", "cancel_queue_job", "web_search", "stream_link", "set_auto_rename", "list_filters", "list_locks",
     "configure_group_control", "group_controls_status", "group_diagnostics", "configure_warning_escalation", "media_info", "export_audit", "trusted_member", "block_domain", "list_domains", "clear_warnings", "set_admin_title", "approve_join_request", "decline_join_request", "list_reports", "resolve_report", "audit_log", "add_case_note", "list_case_notes",
     "list_managed_projects", "register_managed_project", "provision_managed_project", "project_env_schema", "project_run_profiles",
+    "track_series", "list_tracked_series", "update_tracked_series",
 }
 
 RISK = {"safe", "risky", "dangerous"}
@@ -198,6 +199,17 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             slug_match = re.search(r"(?:provision|install|clone)\s+(?:the\s+)?(?:bot\s+)?(?:project\s+)?([a-z][a-z0-9-]{1,62})", low)
             slug = slug_match.group(1) if slug_match else ""
             return Plan(intent="provision_managed_project", summary=f"Provision managed bot {slug or 'project'}", action="provision_managed_project", risk="dangerous", requires_confirmation=True, args={"slug": slug}, missing=[] if slug else ["Provide the registered project name"], confidence=0.85)
+        if any(word in low for word in ("list tracked series", "show tracked manga", "my tracked manhwa", "my tracked manhua")):
+            return Plan(intent="list_tracked_series", summary="List tracked series", action="list_tracked_series", risk="safe", confidence=0.9)
+        track_match = re.search(r"(?:track|follow)\s+(?:the\s+)?(?:manga|manhwa|manhua|series)?\s*[:\-]?\s*(.+?)(?:\s+at\s+chapter\s+(.+))?$", value, re.I)
+        if track_match and any(word in low for word in ("track ", "follow ")):
+            title = track_match.group(1).strip(" .")
+            chapter = (track_match.group(2) or "").strip(" .")
+            media_type = "manhwa" if "manhwa" in low else "manhua" if "manhua" in low else "manga"
+            return Plan(intent="track_series", summary=f"Track {title or 'a series'}", action="track_series", risk="risky", requires_confirmation=True, args={"title": title, "media_type": media_type, "last_chapter": chapter}, missing=[] if title else ["Provide the title to track"], confidence=0.85)
+        update_match = re.search(r"(?:update|set)\s+(.+?)\s+(?:to|at)\s+chapter\s+([A-Za-z0-9.\- ]{1,40})$", value, re.I)
+        if update_match and "chapter" in low:
+            return Plan(intent="update_tracked_series", summary="Update a tracked series chapter", action="update_tracked_series", risk="risky", requires_confirmation=True, args={"title": update_match.group(1).strip(), "last_chapter": update_match.group(2).strip()}, confidence=0.8)
         if any(word in low for word in ("stream this", "make a streaming link", "direct link for this file")):
             return Plan(intent="stream_link", summary="Create an expiring streaming link", action="stream_link", risk="risky", requires_confirmation=True, confidence=0.9)
         if any(word in low for word in ("auto rename", "automatically rename", "rename uploads")):

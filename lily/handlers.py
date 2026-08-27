@@ -37,6 +37,7 @@ ADMIN_ACTIONS = {
     "warn_user", "add_filter", "remove_filter", "set_lock", "save_note", "list_notes", "search_posts", "show_warnings", "set_auto_rename", "stream_link",
     "configure_group_control", "group_controls_status", "group_diagnostics", "configure_warning_escalation", "media_info", "export_audit", "trusted_member", "block_domain", "list_domains", "clear_warnings", "set_admin_title", "approve_join_request", "decline_join_request", "list_reports", "resolve_report", "audit_log", "set_welcome", "set_goodbye", "set_verification", "set_group_rules", "show_group_rules", "add_case_note", "list_case_notes", "create_poll",
     "list_managed_projects", "register_managed_project", "provision_managed_project", "project_env_schema", "project_run_profiles",
+    "track_series", "list_tracked_series", "update_tracked_series",
 }
 
 
@@ -472,6 +473,26 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
             schema = bot_factory.env.parse_example(example)
             await db.save_project_env_schema(slug, [asdict(item) for item in schema])
         return f"Provisioned `{slug}` and installed dependencies. The project is not started automatically; create and review its service configuration before any start action."
+    if action == "track_series":
+        title = str(plan.args.get("title") or "").strip()
+        if not title:
+            return "Provide the manga, manhwa, manhua, or series title to track."
+        item = await db.track_series(chat_id, title, str(plan.args.get("media_type") or "manga"), user_id, str(plan.args.get("last_chapter") or ""), str(plan.args.get("target_channel_id") or ""))
+        await db.audit(chat_id, user_id, "track_series", {"series_id": item["id"], "title": item["title"], "media_type": item["media_type"], "last_chapter": item["last_chapter"]})
+        chapter = f" at chapter {item['last_chapter']}" if item["last_chapter"] else ""
+        return f"Lily is now tracking {item['media_type']} `{item['title']}`{chapter}. This manual tracker does not scrape or download chapter content."
+    if action == "list_tracked_series":
+        rows = await db.list_tracked_series(chat_id)
+        if not rows:
+            return "No series are being tracked in this chat yet."
+        await rich.send(chat_id, [heading("Tracked series", 2), table([["Title", "Type", "Latest chapter", "Status"]] + [[item["title"], item["media_type"], item["last_chapter"] or "—", item["status"]] for item in rows])])
+        return f"Displayed {len(rows)} tracked series."
+    if action == "update_tracked_series":
+        item = await db.update_tracked_series(chat_id, str(plan.args.get("title") or ""), str(plan.args.get("last_chapter") or ""), user_id)
+        if not item:
+            return "That tracked series was not found. Add it first before recording a chapter update."
+        await db.audit(chat_id, user_id, "update_tracked_series", {"series_id": item["id"], "title": item["title"], "last_chapter": item["last_chapter"]})
+        return f"Updated `{item['title']}` to chapter {item['last_chapter']}. You can now ask Lily to prepare a channel announcement with the approved information."
     if action == "export_audit":
         events = await db.recent_audit(chat_id, limit=500)
         output = settings.work_dir / f"lily_audit_{chat_id}_{int(datetime.now(timezone.utc).timestamp())}.csv"
