@@ -28,6 +28,10 @@ cp .env.example .env
 
 Load the `.env` values using your preferred process manager or export them in the shell. Never commit `.env` or a bot token to Git.
 
+## Reliability and continuous verification
+
+Lily contains a top-level Telegram error handler that returns a stable public retry message rather than exposing exception text, provider responses, file paths, raw commands, prompts, or secret values. Full diagnostic information belongs only in protected server-side logs. The repository includes a GitHub Actions workflow that installs declared dependencies, compiles the Python package, and runs the regression suite for every pull request and every push to `main`.
+
 ## Local Bot API server
 
 For near-1-GB files, run Telegram’s official Local Bot API Server on the same machine or a private network endpoint. The official API documentation states that the local server can download files without a size limit and upload files up to 2000 MB. Lily therefore defaults to:

@@ -20,6 +20,24 @@ logging.basicConfig(
 logger = logging.getLogger("lily")
 
 
+def public_error_message() -> str:
+    """Return a stable user-facing failure message without leaking exception data."""
+    return "Lily could not complete that request. Please retry, simplify the request, or ask an administrator to check Lily’s private service logs."
+
+
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Contain unexpected handler failures without sending traceback details to Telegram."""
+    error_type = type(context.error).__name__ if context.error else "UnknownError"
+    logger.error("Unhandled Lily update failure; category=%s", error_type)
+    message = getattr(update, "effective_message", None)
+    if not message:
+        return
+    try:
+        await message.reply_text(public_error_message())
+    except Exception:
+        logger.error("Unable to send Lily’s safe failure notice")
+
+
 async def help_handler(update: Update, context) -> None:
     await help_message(update)
 
@@ -53,6 +71,7 @@ def build_application() -> Application:
     if settings.use_local_bot_api:
         builder = builder.base_url(settings.bot_api_base).base_file_url(settings.bot_file_base).local_mode(True)
     application = builder.post_init(post_init).post_shutdown(post_shutdown).build()
+    application.add_error_handler(on_error)
     # Only onboarding/help remain as optional Telegram commands; all actual work is AI-first natural language.
     application.add_handler(CommandHandler("start", start), group=-1)
     application.add_handler(CommandHandler("help", help_handler), group=-1)

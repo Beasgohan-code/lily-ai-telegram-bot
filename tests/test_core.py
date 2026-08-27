@@ -14,6 +14,7 @@ from unittest.mock import patch
 import httpx
 
 from lily.agent import ACTIONS, AIClient, Plan
+from lily.main import public_error_message
 from lily.cli import public_agent_report
 from lily.rich import live_activity_blocks
 from lily.sandbox import sandbox_status
@@ -42,6 +43,12 @@ class LilyCoreTests(unittest.TestCase):
     def test_safe_filename_blocks_paths(self):
         self.assertEqual(safe_filename("../../secret.txt"), "secret.txt")
         self.assertNotIn("/", safe_filename("a/b:c?.txt"))
+
+    def test_public_failure_message_does_not_leak_error_details(self):
+        message = public_error_message()
+        self.assertIn("could not complete", message)
+        self.assertNotIn("traceback", message.lower())
+        self.assertNotIn("token", message.lower())
 
     def test_rich_confirmation_payload(self):
         payload = confirmation_keyboard("abc")
