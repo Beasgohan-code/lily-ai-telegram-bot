@@ -26,6 +26,7 @@ from .messaging import send_long_rich
 from .media_generation import media_generation
 from .group_controls import GROUP_CONTROL_MAP, control_summary
 from .bot_factory import BotFactoryError, ManagedBotFactory
+from .knowledge_library import catalog as knowledge_catalog
 
 
 tools = LilyTools(db)
@@ -40,6 +41,7 @@ ADMIN_ACTIONS = {
     "track_series", "list_tracked_series", "update_tracked_series",
     "download_chapter",
     "tool_capabilities",
+    "show_operating_skills",
 }
 
 
@@ -441,6 +443,10 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         ]
         await rich.send(chat_id, [heading("Lily tool capability status", 2), table(rows), paragraph("Changing a host environment variable is not enough to bypass Lily’s admin, confirmation, repository, path, or source checks.")])
         return "Displayed Lily’s enabled capability gates."
+    if action == "show_operating_skills":
+        rows = [["Skill", "Purpose"]] + [[item["name"], item["summary"]] for item in knowledge_catalog()]
+        await rich.send(chat_id, [heading("Lily operating skills", 2), paragraph("These curated protocols guide named, permissioned Lily actions. They do not enable arbitrary code or shell access."), table(rows)])
+        return "Displayed Lily’s curated operating skill library."
     if action == "list_managed_projects":
         projects = await db.list_managed_projects(user_id)
         if not projects:
@@ -802,9 +808,10 @@ async def handle_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: 
         return
     if plan.requires_confirmation or plan.risk in {"risky", "dangerous"}:
         action_id = await db.create_pending(update.effective_chat.id, update.effective_user.id, plan.action, _plan_dict(plan), settings.confirmation_ttl_seconds)
-        extra = "\n\nFor audio downloads, Yes means you confirm that you have permission to download the material." if plan.action == "download_song" else ""
-        await rich.send(update.effective_chat.id, [heading("Confirmation required", 2), paragraph(plan.summary), table([["Action", plan.action], ["Risk", plan.risk], ["Requested by", update.effective_user.full_name]]), paragraph(extra or "Lily will execute this only after you approve it."), details("Action details", [preformatted(json.dumps(_plan_dict(plan), indent=2, ensure_ascii=False), "json")])], reply_markup=confirmation_keyboard(action_id), reply_to=update.effective_message.message_id)
+        extra = "For audio downloads, Yes confirms you have permission to download the material." if plan.action == "download_song" else "For chapter files, Yes confirms you have already declared distribution rights for the approved direct source." if plan.action == "download_chapter" else "Lily will execute this only after you approve it."
+        await rich.send(update.effective_chat.id, [heading("Confirmation required", 2), paragraph(plan.summary), table([["Action", plan.action], ["Risk", plan.risk], ["Requested by", update.effective_user.full_name]]), details("Planned stages", [list_block(plan.public_stages())]), paragraph(extra)], reply_markup=confirmation_keyboard(action_id), reply_to=update.effective_message.message_id)
         return
+    await rich.send(update.effective_chat.id, [heading("Lily plan", 3), list_block(plan.public_stages())], reply_to=update.effective_message.message_id)
     await progress_message(update, "Checking the request and preparing the result…")
     result = await execute_plan(update, context, plan)
     await rich.send(update.effective_chat.id, [heading("Completed", 2), paragraph(result)])

@@ -8,6 +8,8 @@ from typing import Any
 from .config import settings
 from .group_controls import GROUP_CONTROL_MAP
 from .model_router import ModelProfile, ModelRouter
+from .execution_workflow import visible_stages
+from .knowledge_library import planning_policy
 
 
 ACTIONS = {
@@ -25,6 +27,7 @@ ACTIONS = {
     "track_series", "list_tracked_series", "update_tracked_series",
     "download_chapter",
     "tool_capabilities",
+    "show_operating_skills",
 }
 
 RISK = {"safe", "risky", "dangerous"}
@@ -40,6 +43,10 @@ class Plan:
     args: dict[str, Any] = field(default_factory=dict)
     missing: list[str] = field(default_factory=list)
     confidence: float = 0.0
+
+    def public_stages(self) -> list[str]:
+        """Return a user-visible process summary without revealing private reasoning."""
+        return visible_stages(self.action, self.risk, self.missing, self.requires_confirmation)
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "Plan":
@@ -114,9 +121,10 @@ Never call tools yourself. Output only the JSON schema.
 Available actions: {', '.join(sorted(ACTIONS))}.
 Dangerous actions include banning, kicking, muting, deleting, pinning, changing rules/settings, publishing or deleting channel posts, external downloads, and expensive or large file processing.
 Set requires_confirmation=true for any risky or dangerous action. Require an explicit reply target or numeric user id for moderation. For download_song, require a direct permitted URL and include rights_confirmed=false until the user explicitly confirms they have permission.
-For create_skill, put a structured trigger in args.trigger and a structured action in args.action; ask for missing fields when unclear. For create_poll, use args.question, args.options (2–10 strings), and optional args.anonymous. For add_filter, use args.trigger and optional args.response/delete_message/warn. For set_lock, use args.content_type and args.enabled. For configure_group_control, use args.control and args.enabled. For configure_warning_escalation, use a bounded args.threshold and args.seconds. For trusted_member, set args.user_id and args.trusted. For block_domain, set args.domain and args.blocked. For set_welcome/set_goodbye use args.enabled and args.text. For restrict_user use args.user_id, args.mode (read_only or text_only), and bounded args.seconds. For add_case_note use args.note and optional args.report_id/args.user_id. For save_note, use args.name and args.content. For search_posts, use args.channel_id and args.query. For plugin_reply, use args.text.
-Group settings: {json.dumps(chat_settings, ensure_ascii=False)}
-Recent memory: {json.dumps(memories, ensure_ascii=False)}
+	For create_skill, put a structured trigger in args.trigger and a structured action in args.action; ask for missing fields when unclear. For create_poll, use args.question, args.options (2–10 strings), and optional args.anonymous. For add_filter, use args.trigger and optional args.response/delete_message/warn. For set_lock, use args.content_type and args.enabled. For configure_group_control, use args.control and args.enabled. For configure_warning_escalation, use a bounded args.threshold and args.seconds. For trusted_member, set args.user_id and args.trusted. For block_domain, set args.domain and args.blocked. For set_welcome/set_goodbye use args.enabled and args.text. For restrict_user use args.user_id, args.mode (read_only or text_only), and bounded args.seconds. For add_case_note use args.note and optional args.report_id/args.user_id. For save_note, use args.name and args.content. For search_posts, use args.channel_id and args.query. For plugin_reply, use args.text.
+	Group settings: {json.dumps(chat_settings, ensure_ascii=False)}
+	Recent memory: {json.dumps(memories, ensure_ascii=False)}
+	Curated operating policy: {planning_policy()}
 """
         payload = {
             "messages": [
@@ -183,6 +191,8 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             return Plan(intent="list_managed_projects", summary="List registered bot projects", action="list_managed_projects", risk="safe", confidence=0.9)
         if any(word in low for word in ("tool status", "capability status", "what tools are enabled", "agent tool status")):
             return Plan(intent="tool_capabilities", summary="Show Lily tool capability gates", action="tool_capabilities", risk="safe", confidence=0.9)
+        if any(word in low for word in ("operating skills", "project knowledge", "lily skill library", "show lily skills")):
+            return Plan(intent="show_operating_skills", summary="Show Lily’s curated operating skills", action="show_operating_skills", risk="safe", confidence=0.9)
         if any(word in low for word in ("run profile options", "bot run options", "custom run command options")):
             return Plan(intent="project_run_profiles", summary="Show supported bot runtime options", action="project_run_profiles", risk="safe", confidence=0.9)
         if any(word in low for word in ("project env variables", "bot environment variables", "show bot env")):

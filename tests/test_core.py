@@ -25,6 +25,8 @@ from lily.config import settings
 from lily.free_models import CATALOG, PRESETS
 from lily.group_controls import GROUP_CONTROLS, GROUP_CONTROL_MAP
 from lily.bot_factory import BotFactoryError, EnvironmentWizard, ManagedBotFactory
+from lily.execution_workflow import visible_stages
+from lily.knowledge_library import catalog as knowledge_catalog, read_skill
 
 
 class LilyCoreTests(unittest.TestCase):
@@ -389,6 +391,24 @@ class LilyCoreTests(unittest.TestCase):
             asyncio.run(run())
         status = AIClient().heuristic_plan("Lily show tool status", {"chat_type": "private", "reply": {}})
         self.assertEqual(status.action, "tool_capabilities")
+
+    def test_visible_execution_stages_are_procedural_not_private_reasoning(self):
+        stages = visible_stages("download_chapter", "dangerous", [], True)
+        self.assertIn("Check source allow-lists, direct-file format, and declared rights", stages)
+        self.assertIn("Wait for the requester’s explicit confirmation", stages)
+        self.assertEqual(stages[-1], "Report a concise result")
+        missing = visible_stages("ban_user", "dangerous", ["numeric user ID"], True)
+        self.assertIn("Collect the missing details", missing)
+        self.assertNotIn("Wait for the requester’s explicit confirmation", missing)
+
+    def test_curated_operating_skill_catalogue_is_bounded_and_read_only(self):
+        names = {item["name"] for item in knowledge_catalog()}
+        self.assertTrue({"agent-workflow", "moderation", "media", "bot-operations", "deployment"}.issubset(names))
+        self.assertIn("never expose hidden chain-of-thought", read_skill("agent-workflow").lower())
+        with self.assertRaises(KeyError):
+            read_skill("../../etc/passwd")
+        plan = AIClient().heuristic_plan("Lily show operating skills", {"chat_type": "private", "reply": {}})
+        self.assertEqual(plan.action, "show_operating_skills")
 
 
 if __name__ == "__main__":

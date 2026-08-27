@@ -169,6 +169,12 @@ The environment wizard parses a project’s `.env.example`, recognizes likely se
 
 Set `LILY_ALLOWED_PROJECT_REPOSITORIES` to a comma-separated exact HTTPS GitHub allow-list before registering projects. `LILY_BOT_FACTORY_DRY_RUN=true` is the default and ensures that a provision request displays the exact fixed clone, install, and run plan without changing the host. Set it to `false` only after the always-on host, test bot, service supervisor, storage, and secret handling are verified. In active mode, Python projects can install from `requirements.txt` with `python -m pip install --no-input -r requirements.txt` or from `pyproject.toml`; Node and Docker Compose projects use fixed reviewed plans. Dependency installation can run third-party code, so a repository approval and confirmation remain mandatory.
 
+## Curated operating skills and multi-step execution
+
+Lily includes a version-controlled project-knowledge library in `lily/knowledge/`. It provides focused `SKILL.md` playbooks for agent workflow, moderation, media, channels, model routing, bot operations, deployment, and Mini App integration. These guides define safe procedures for named Python actions; they do not grant models arbitrary shell commands, unrestricted filesystem access, or the ability to add tools dynamically.
+
+For every named action, Lily can show a concise, user-visible sequence: understand the request, validate permissions and capability gates, check the relevant file/source/repository conditions, obtain confirmation when required, execute the approved action, audit the outcome, and report the result. This gives users useful progress without disclosing private model reasoning or secrets. Ask `Lily, show operating skills` to view the available protocols, or `Lily, show tool status` to see which host-gated features are currently enabled.
+
 ## References
 
 - [Telegram Bot API](https://core.telegram.org/bots/api)
