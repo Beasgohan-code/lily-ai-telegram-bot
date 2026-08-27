@@ -175,6 +175,19 @@ Lily includes a version-controlled project-knowledge library in `lily/knowledge/
 
 For every named action, Lily can show a concise, user-visible sequence: understand the request, validate permissions and capability gates, check the relevant file/source/repository conditions, obtain confirmation when required, execute the approved action, audit the outcome, and report the result. This gives users useful progress without disclosing private model reasoning or secrets. Ask `Lily, show operating skills` to view the available protocols, or `Lily, show tool status` to see which host-gated features are currently enabled.
 
+## MangaDex metadata and release feed
+
+Lily includes an **official MangaDex metadata-only** client. It is disabled by default. To enable it, set a truthful user agent and a conservative request interval; Lily caches repeated requests and never calls reader, image, MangaDex@Home, or chapter-download endpoints.
+
+```env
+LILY_ENABLE_MANGADEX_METADATA=true
+LILY_MANGADEX_USER_AGENT="Lily/1.0 (your-contact@example.com)"
+LILY_MANGADEX_MIN_INTERVAL_SECONDS=0.30
+LILY_MANGADEX_CACHE_SECONDS=300
+```
+
+Use `Lily, MangaDex search for Frieren` to search title metadata, or `Lily, show MangaDex recent chapters for <MangaDex title ID>` to view a release feed. Lily attributes results to MangaDex and displays group attribution metadata when available; it does not provide a chapter reader or content-download feature. MangaPill remains manual-link-only because Lily has no verified authorized public API integration for it.
+
 ## References
 
 - [Telegram Bot API](https://core.telegram.org/bots/api)

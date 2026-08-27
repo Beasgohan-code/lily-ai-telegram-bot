@@ -28,6 +28,7 @@ ACTIONS = {
     "download_chapter",
     "tool_capabilities",
     "show_operating_skills",
+    "mangadex_search", "mangadex_feed",
 }
 
 RISK = {"safe", "risky", "dangerous"}
@@ -193,6 +194,13 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             return Plan(intent="tool_capabilities", summary="Show Lily tool capability gates", action="tool_capabilities", risk="safe", confidence=0.9)
         if any(word in low for word in ("operating skills", "project knowledge", "lily skill library", "show lily skills")):
             return Plan(intent="show_operating_skills", summary="Show Lily’s curated operating skills", action="show_operating_skills", risk="safe", confidence=0.9)
+        if "mangadex" in low and any(word in low for word in ("search", "find", "look up")):
+            query = re.sub(r"^.*?mangadex\s*(?:search|find|look up)?\s*(?:for|:)??\s*", "", value, flags=re.I).strip()
+            return Plan(intent="mangadex_search", summary="Search permitted MangaDex title metadata", action="mangadex_search", risk="safe", args={"query": query}, missing=[] if query else ["Provide a title, for example: MangaDex search for Frieren"], confidence=0.85)
+        if "mangadex" in low and any(word in low for word in ("feed", "recent chapters", "latest chapters")):
+            found = re.search(r"\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b", low)
+            manga_id = found.group(0) if found else ""
+            return Plan(intent="mangadex_feed", summary="Show permitted MangaDex release-feed metadata", action="mangadex_feed", risk="safe", args={"manga_id": manga_id}, missing=[] if manga_id else ["Provide the MangaDex title ID"], confidence=0.85)
         if any(word in low for word in ("run profile options", "bot run options", "custom run command options")):
             return Plan(intent="project_run_profiles", summary="Show supported bot runtime options", action="project_run_profiles", risk="safe", confidence=0.9)
         if any(word in low for word in ("project env variables", "bot environment variables", "show bot env")):

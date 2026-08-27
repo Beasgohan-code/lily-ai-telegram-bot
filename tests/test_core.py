@@ -27,6 +27,7 @@ from lily.group_controls import GROUP_CONTROLS, GROUP_CONTROL_MAP
 from lily.bot_factory import BotFactoryError, EnvironmentWizard, ManagedBotFactory
 from lily.execution_workflow import visible_stages
 from lily.knowledge_library import catalog as knowledge_catalog, read_skill
+from lily.mangadex import MangaDexClient, MangaDexError
 
 
 class LilyCoreTests(unittest.TestCase):
@@ -437,6 +438,23 @@ class LilyCoreTests(unittest.TestCase):
             read_skill("../../etc/passwd")
         plan = AIClient().heuristic_plan("Lily show operating skills", {"chat_type": "private", "reply": {}})
         self.assertEqual(plan.action, "show_operating_skills")
+
+    def test_mangadex_metadata_client_is_disabled_by_default_and_parses_metadata(self):
+        async def run():
+            disabled = MangaDexClient(replace(settings, enable_mangadex_metadata=False, mangadex_user_agent="Lily/1.0 (test@example.com)"))
+            with self.assertRaises(MangaDexError):
+                await disabled.search_titles("Frieren")
+            await disabled.close()
+            def handler(request):
+                self.assertEqual(request.headers["User-Agent"], "Lily/1.0 (test@example.com)")
+                return httpx.Response(200, json={"data": [{"id": "title-id", "attributes": {"title": {"en": "Frieren"}, "status": "ongoing", "year": 2020}}]})
+            client = MangaDexClient(replace(settings, enable_mangadex_metadata=True, mangadex_user_agent="Lily/1.0 (test@example.com)", mangadex_min_interval_seconds=0.25), httpx.MockTransport(handler))
+            results = await client.search_titles("Frieren")
+            self.assertEqual(results[0]["title"], "Frieren")
+            await client.close()
+        asyncio.run(run())
+        search = AIClient().heuristic_plan("Lily MangaDex search for Frieren", {"chat_type": "private", "reply": {}})
+        self.assertEqual(search.action, "mangadex_search")
 
 
 if __name__ == "__main__":

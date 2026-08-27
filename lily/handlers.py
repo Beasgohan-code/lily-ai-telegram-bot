@@ -28,6 +28,7 @@ from .media_generation import media_generation
 from .group_controls import GROUP_CONTROL_MAP, control_summary
 from .bot_factory import BotFactoryError, ManagedBotFactory
 from .knowledge_library import catalog as knowledge_catalog
+from .mangadex import MangaDexError, mangadex
 
 
 tools = LilyTools(db)
@@ -43,6 +44,7 @@ ADMIN_ACTIONS = {
     "download_chapter",
     "tool_capabilities",
     "show_operating_skills",
+    "mangadex_search", "mangadex_feed",
 }
 
 
@@ -448,6 +450,22 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         rows = [["Skill", "Purpose"]] + [[item["name"], item["summary"]] for item in knowledge_catalog()]
         await rich.send(chat_id, [heading("Lily operating skills", 2), paragraph("These curated protocols guide named, permissioned Lily actions. They do not enable arbitrary code or shell access."), table(rows)])
         return "Displayed Lily’s curated operating skill library."
+    if action == "mangadex_search":
+        try:
+            results = await mangadex.search_titles(str(plan.args.get("query") or ""))
+        except MangaDexError as exc:
+            return str(exc)
+        rows = [["Title", "Status", "Year", "MangaDex ID"]] + [[item["title"], item["status"], item["year"], item["id"]] for item in results]
+        await rich.send(chat_id, [heading("MangaDex title metadata", 2), table(rows), blockquote("Source: MangaDex. This is metadata only; Lily does not retrieve reader pages or chapter files from MangaDex.")])
+        return f"Displayed {len(results)} MangaDex title record(s)."
+    if action == "mangadex_feed":
+        try:
+            results = await mangadex.recent_chapters(str(plan.args.get("manga_id") or ""))
+        except MangaDexError as exc:
+            return str(exc)
+        rows = [["Chapter", "Title", "Language", "Groups"]] + [[item["chapter"], item["title"], item["language"], item["groups"]] for item in results]
+        await rich.send(chat_id, [heading("MangaDex release-feed metadata", 2), table(rows), blockquote("Source: MangaDex. Scanlation groups are shown as attribution metadata; Lily does not provide a reader or download flow.")])
+        return f"Displayed {len(results)} MangaDex release-feed record(s)."
     if action == "list_managed_projects":
         projects = await db.list_managed_projects(user_id)
         if not projects:

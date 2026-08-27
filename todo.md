@@ -54,3 +54,6 @@
 - [x] Add a bounded chapter-distribution queue for public-domain, licensed, or user-provided DRM-free direct files, with stored rights attestation, source allow-list validation, progress, retries, cancellation, and per-file delivery outcomes.
 - [x] Add rich owner-bound queue status, pagination, and audit views for approved chapter-distribution jobs without scraping third-party chapter sites.
 - [x] Expand Lily knowledge `SKILL.md` playbooks with detailed rights-aware media, release-tracker, queue, and operational protocols.
+- [x] Verify the current MangaDex official API, rate-limit, attribution, and content-use rules before adding metadata and release-tracking support.
+- [x] Add a detailed Lily `SKILL.md` for permitted MangaDex metadata search, title records, chapter-feed tracking, attribution, caching, and safe channel-draft workflows.
+- [x] Keep MangaPill limited to manual approved links unless an authorized public API and distribution terms are verified; do not implement scrapers or reader-page downloaders.

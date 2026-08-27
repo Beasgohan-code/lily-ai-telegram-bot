@@ -87,6 +87,10 @@ class Settings:
         d.strip().lower() for d in os.getenv("LILY_ALLOWED_CHAPTER_DOMAINS", "").split(",") if d.strip()
     ))
     allow_direct_chapter_downloads: bool = field(default_factory=lambda: _bool("LILY_ALLOW_DIRECT_CHAPTER_DOWNLOADS", False))
+    enable_mangadex_metadata: bool = field(default_factory=lambda: _bool("LILY_ENABLE_MANGADEX_METADATA", False))
+    mangadex_user_agent: str = field(default_factory=lambda: os.getenv("LILY_MANGADEX_USER_AGENT", ""))
+    mangadex_min_interval_seconds: float = field(default_factory=lambda: max(0.25, float(os.getenv("LILY_MANGADEX_MIN_INTERVAL_SECONDS", "0.3"))))
+    mangadex_cache_seconds: int = field(default_factory=lambda: _int("LILY_MANGADEX_CACHE_SECONDS", 300))
     admin_user_ids: tuple[int, ...] = field(default_factory=lambda: tuple(
         int(v.strip()) for v in os.getenv("LILY_ADMIN_USER_IDS", "").split(",") if v.strip().lstrip("-").isdigit()
     ))
