@@ -123,6 +123,19 @@ async def is_admin(update: Update) -> bool:
         return False
 
 
+def _optional_bounded_int(value: object, minimum: int, maximum: int, label: str) -> int:
+    """Validate optional action integers without silently broadening a requested scope."""
+    if value in (None, "", 0):
+        return 0
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be a whole number.") from exc
+    if not minimum <= number <= maximum:
+        raise ValueError(f"{label} must be between {minimum} and {maximum}.")
+    return number
+
+
 def addressed_to_lily(update: Update, bot_username: str | None) -> bool:
     message = update.effective_message
     chat = update.effective_chat
@@ -519,6 +532,8 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         return "Updated the group description."
     if action == "set_group_default_permissions":
         mode = str(plan.args.get("mode") or "normal").lower()
+        if mode not in {"normal", "read_only"}:
+            return "Choose either normal or read-only default member permissions."
         read_only = mode == "read_only"
         permissions = {
             "can_send_messages": not read_only,
@@ -542,8 +557,8 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         await db.audit(chat_id, user_id, "set_group_default_permissions", {"mode": "read_only" if read_only else "normal"})
         return "Regular members are now read-only." if read_only else "Normal member participation permissions were restored."
     if action == "create_invite_link":
-        member_limit = max(0, min(int(plan.args.get("member_limit") or 0), 99_999))
-        expire_hours = max(0, min(int(plan.args.get("expire_hours") or 0), 168))
+        member_limit = _optional_bounded_int(plan.args.get("member_limit"), 1, 99_999, "Invite member limit")
+        expire_hours = _optional_bounded_int(plan.args.get("expire_hours"), 1, 168, "Invite expiry period")
         name = str(plan.args.get("name") or "").strip()[:32]
         payload: dict[str, Any] = {"chat_id": chat_id}
         if name:
@@ -573,7 +588,12 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         await db.audit(chat_id, user_id, "create_forum_topic", {"name": name, "message_thread_id": thread_id})
         return f"Created forum topic `{name}`." if not thread_id else f"Created forum topic `{name}` (thread {thread_id})."
     if action in {"close_forum_topic", "reopen_forum_topic", "delete_forum_topic"}:
-        thread_id = int(plan.args.get("message_thread_id") or 0)
+        try:
+            thread_id = int(plan.args.get("message_thread_id") or 0)
+        except (TypeError, ValueError):
+            thread_id = 0
+        if thread_id <= 0:
+            return "Reply inside the forum topic or provide its valid numeric message thread ID."
         methods = {"close_forum_topic": "closeForumTopic", "reopen_forum_topic": "reopenForumTopic", "delete_forum_topic": "deleteForumTopic"}
         await rich.call(methods[action], {"chat_id": chat_id, "message_thread_id": thread_id})
         await db.set_control(chat_id, "forum_topic_management", True, update.effective_chat.title or "")

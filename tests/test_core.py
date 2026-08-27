@@ -12,7 +12,7 @@ from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlencode
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 
@@ -44,6 +44,7 @@ from lily.execution_workflow import visible_stages
 from lily.knowledge_library import catalog as knowledge_catalog, read_skill
 from lily.mangadex import MangaDexClient, MangaDexError
 from lily.messaging import split_for_telegram
+from lily.handlers import execute_plan
 
 
 class LilyCoreTests(unittest.TestCase):
@@ -652,6 +653,65 @@ class LilyCoreTests(unittest.TestCase):
         revoke = Plan.from_dict({"action": "revoke_invite_link", "risk": "safe", "requires_confirmation": False, "args": {}, "missing": []})
         self.assertTrue(revoke.requires_confirmation)
         self.assertIn("invite link", revoke.missing[0])
+
+    def test_new_group_management_executor_uses_fixed_api_methods_and_audits(self):
+        class Chat:
+            id = 100
+            title = "Test group"
+            type = "supergroup"
+
+        class User:
+            id = 200
+            full_name = "Test admin"
+
+        class Message:
+            message_id = 300
+
+        class UpdateStub:
+            effective_chat = Chat()
+            effective_user = User()
+            effective_message = Message()
+
+        class ContextStub:
+            pass
+
+        async def run():
+            with tempfile.TemporaryDirectory() as directory:
+                database = Database(str(Path(directory) / "group-actions.sqlite3"))
+                await database.init()
+                api_calls = []
+
+                async def fixed_call(method, payload):
+                    api_calls.append((method, payload))
+                    if method == "createChatInviteLink":
+                        return {"invite_link": "https://t.me/+ExampleInvite"}
+                    return True
+
+                with patch("lily.handlers.db", database), patch("lily.handlers.rich.call", new=AsyncMock(side_effect=fixed_call)):
+                    locked = await execute_plan(UpdateStub(), ContextStub(), Plan(action="set_group_default_permissions", args={"mode": "read_only"}))
+                    invite = await execute_plan(UpdateStub(), ContextStub(), Plan(action="create_invite_link", args={"name": "weekend", "member_limit": 20, "expire_hours": 24}))
+                    closed = await execute_plan(UpdateStub(), ContextStub(), Plan(action="close_forum_topic", args={"message_thread_id": 42}))
+                    invalid_mode = await execute_plan(UpdateStub(), ContextStub(), Plan(action="set_group_default_permissions", args={"mode": "unrestricted"}))
+                    invalid_topic = await execute_plan(UpdateStub(), ContextStub(), Plan(action="close_forum_topic", args={"message_thread_id": "invalid"}))
+                    with self.assertRaises(ValueError):
+                        await execute_plan(UpdateStub(), ContextStub(), Plan(action="create_invite_link", args={"member_limit": "invalid"}))
+                self.assertEqual(locked, "Regular members are now read-only.")
+                self.assertIn("https://t.me/+ExampleInvite", invite)
+                self.assertEqual(closed, "The forum topic was closed.")
+                self.assertIn("normal or read-only", invalid_mode)
+                self.assertIn("valid numeric", invalid_topic)
+                self.assertEqual([call[0] for call in api_calls], ["setChatPermissions", "createChatInviteLink", "closeForumTopic"])
+                self.assertTrue(api_calls[0][1]["permissions"]["can_send_messages"] is False)
+                self.assertEqual(api_calls[1][1]["member_limit"], 20)
+                self.assertEqual(api_calls[2][1]["message_thread_id"], 42)
+                controls = await database.get_controls(100)
+                self.assertTrue(controls["default_member_permissions"])
+                self.assertTrue(controls["invite_link_management"])
+                self.assertTrue(controls["forum_topic_management"])
+                events = await database.recent_audit(100, limit=10)
+                self.assertEqual({item["event"] for item in events}, {"set_group_default_permissions", "create_invite_link", "close_forum_topic"})
+
+        asyncio.run(run())
 
     def test_heuristic_router_understands_media_and_audit_tools(self):
         client = AIClient()
