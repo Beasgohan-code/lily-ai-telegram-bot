@@ -785,6 +785,12 @@ class Database:
             rows = await (await db.execute(query, values + (max(1, min(limit, 100)),))).fetchall()
             return [dict(row) for row in rows]
 
+    async def get_tracked_series(self, chat_id: int, title: str) -> dict[str, Any] | None:
+        normalized = " ".join(title.lower().split())
+        async with self.connect() as db:
+            row = await (await db.execute("SELECT * FROM tracked_series WHERE chat_id=? AND normalized_title=? AND active=1", (chat_id, normalized))).fetchone()
+            return dict(row) if row else None
+
     async def update_tracked_series(self, chat_id: int, title: str, last_chapter: str, actor_id: int, status: str = "tracking") -> dict[str, Any] | None:
         normalized = " ".join(title.lower().split())
         now = int(time.time())

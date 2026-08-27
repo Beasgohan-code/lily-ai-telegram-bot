@@ -289,6 +289,8 @@ class ManagedBotFactory:
         effective_dry_run = self.settings.bot_factory_dry_run if dry_run is None else dry_run
         if effective_dry_run:
             return {"dry_run": True, "clone": ["git", "clone", "--depth", "1", "--branch", draft.branch, draft.repository_url, str(draft.project_root)], "install": "Create .venv and resolve the approved manifest after clone", "run": self.run_command(draft)}
+        if not self.settings.enable_managed_project_provisioning:
+            raise BotFactoryError("Managed project provisioning is disabled. Keep LILY_ENABLE_MANAGED_PROJECT_PROVISIONING=false until the persistent host is hardened and tested.")
         if draft.project_root.exists():
             raise BotFactoryError("The managed project directory already exists; use the update workflow instead.")
         draft.project_root.parent.mkdir(parents=True, exist_ok=True)

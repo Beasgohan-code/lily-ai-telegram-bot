@@ -368,6 +368,28 @@ class LilyCoreTests(unittest.TestCase):
                 self.assertEqual((await database.list_tracked_series(1))[0]["title"], "Solo Leveling")
         asyncio.run(run())
 
+    def test_chapter_download_requires_explicit_rights_and_source_details(self):
+        client = AIClient()
+        plan = client.heuristic_plan("Lily download 367 Dragon Ball chapter https://official.example/chapter-367.pdf", {"chat_type": "private", "reply": {}})
+        self.assertEqual(plan.action, "download_chapter")
+        self.assertEqual(plan.args["title"], "Dragon Ball")
+        self.assertEqual(plan.args["chapter"], "367")
+        self.assertFalse(plan.args["rights_confirmed"])
+        self.assertIn("explicit distribution-rights confirmation", plan.missing)
+
+    def test_managed_provisioning_requires_two_explicit_gates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            configured = replace(settings, projects_root=root / "projects", project_env_root=root / "env", allowed_project_repositories=("https://github.com/example/manga-bot",), bot_factory_dry_run=False, enable_managed_project_provisioning=False)
+            factory = ManagedBotFactory(Database(str(root / "registry.sqlite3")), configured)
+            draft = factory.draft("manga-bot", "https://github.com/example/manga-bot", "python", "python-main", "bot.py")
+            async def run():
+                with self.assertRaises(BotFactoryError):
+                    await factory.clone_and_install(draft)
+            asyncio.run(run())
+        status = AIClient().heuristic_plan("Lily show tool status", {"chat_type": "private", "reply": {}})
+        self.assertEqual(status.action, "tool_capabilities")
+
 
 if __name__ == "__main__":
     unittest.main()

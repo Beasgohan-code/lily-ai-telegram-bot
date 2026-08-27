@@ -23,6 +23,8 @@ ACTIONS = {
     "configure_group_control", "group_controls_status", "group_diagnostics", "configure_warning_escalation", "media_info", "export_audit", "trusted_member", "block_domain", "list_domains", "clear_warnings", "set_admin_title", "approve_join_request", "decline_join_request", "list_reports", "resolve_report", "audit_log", "add_case_note", "list_case_notes",
     "list_managed_projects", "register_managed_project", "provision_managed_project", "project_env_schema", "project_run_profiles",
     "track_series", "list_tracked_series", "update_tracked_series",
+    "download_chapter",
+    "tool_capabilities",
 }
 
 RISK = {"safe", "risky", "dangerous"}
@@ -179,6 +181,8 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             return Plan(intent="export_audit", summary="Export the group audit log", action="export_audit", risk="dangerous", requires_confirmation=True, confidence=0.9)
         if any(word in low for word in ("list managed bots", "show managed bots", "list bot projects")):
             return Plan(intent="list_managed_projects", summary="List registered bot projects", action="list_managed_projects", risk="safe", confidence=0.9)
+        if any(word in low for word in ("tool status", "capability status", "what tools are enabled", "agent tool status")):
+            return Plan(intent="tool_capabilities", summary="Show Lily tool capability gates", action="tool_capabilities", risk="safe", confidence=0.9)
         if any(word in low for word in ("run profile options", "bot run options", "custom run command options")):
             return Plan(intent="project_run_profiles", summary="Show supported bot runtime options", action="project_run_profiles", risk="safe", confidence=0.9)
         if any(word in low for word in ("project env variables", "bot environment variables", "show bot env")):
@@ -210,6 +214,15 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
         update_match = re.search(r"(?:update|set)\s+(.+?)\s+(?:to|at)\s+chapter\s+([A-Za-z0-9.\- ]{1,40})$", value, re.I)
         if update_match and "chapter" in low:
             return Plan(intent="update_tracked_series", summary="Update a tracked series chapter", action="update_tracked_series", risk="risky", requires_confirmation=True, args={"title": update_match.group(1).strip(), "last_chapter": update_match.group(2).strip()}, confidence=0.8)
+        if "chapter" in low and any(word in low for word in ("download", "fetch")):
+            url = next(iter(re.findall(r"https?://\S+", value)), "")
+            before_url = value.split(url, 1)[0] if url else value
+            match = re.search(r"(?:download|fetch)\s+(?:(\d+(?:\.\d+)?)\s+)?(.+?)\s+chapter", before_url, re.I)
+            chapter_match = re.search(r"chapter\s*(\d+(?:\.\d+)?)", before_url, re.I)
+            title = match.group(2).strip(" ,.-") if match else ""
+            chapter = (match.group(1) if match and match.group(1) else (chapter_match.group(1) if chapter_match else ""))
+            rights = any(phrase in low for phrase in ("i have rights", "i own the rights", "licensed source", "authorized source"))
+            return Plan(intent="download_chapter", summary=f"Retrieve an approved chapter file for {title or 'a tracked series'}", action="download_chapter", risk="dangerous", requires_confirmation=True, args={"title": title, "chapter": chapter, "url": url, "rights_confirmed": rights}, missing=[item for item, present in (("series title", bool(title)), ("chapter number", bool(chapter)), ("direct approved source URL", bool(url)), ("explicit distribution-rights confirmation", rights)) if not present], confidence=0.8)
         if any(word in low for word in ("stream this", "make a streaming link", "direct link for this file")):
             return Plan(intent="stream_link", summary="Create an expiring streaming link", action="stream_link", risk="risky", requires_confirmation=True, confidence=0.9)
         if any(word in low for word in ("auto rename", "automatically rename", "rename uploads")):

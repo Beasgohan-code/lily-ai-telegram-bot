@@ -38,6 +38,8 @@ ADMIN_ACTIONS = {
     "configure_group_control", "group_controls_status", "group_diagnostics", "configure_warning_escalation", "media_info", "export_audit", "trusted_member", "block_domain", "list_domains", "clear_warnings", "set_admin_title", "approve_join_request", "decline_join_request", "list_reports", "resolve_report", "audit_log", "set_welcome", "set_goodbye", "set_verification", "set_group_rules", "show_group_rules", "add_case_note", "list_case_notes", "create_poll",
     "list_managed_projects", "register_managed_project", "provision_managed_project", "project_env_schema", "project_run_profiles",
     "track_series", "list_tracked_series", "update_tracked_series",
+    "download_chapter",
+    "tool_capabilities",
 }
 
 
@@ -427,6 +429,18 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         return "\n".join(f"• {item['event']} — {json.dumps(item.get('detail', {}), ensure_ascii=False)[:160]}" for item in events)[:3500] or "No Lily audit events are recorded yet."
     if action == "project_run_profiles":
         return "Choose a fixed run profile: `python-main` (entrypoint such as bot.py), `python-module` (module such as manga_bot.main), `node-start` (npm run start), or `docker-compose-up` (docker compose up). Lily does not accept arbitrary chat-supplied shell commands."
+    if action == "tool_capabilities":
+        rows = [
+            ["Capability", "Status", "Protection"],
+            ["Managed project registry", "enabled", "admin-only; allow-listed repository and fixed run profile"],
+            ["Project provisioning", "enabled" if settings.enable_managed_project_provisioning and not settings.bot_factory_dry_run else "dry-run / disabled", "two gates plus confirmation; private virtual environment"],
+            ["Direct audio retrieval", "enabled" if settings.allow_direct_media_downloads else "disabled", "allow-listed direct audio only; rights confirmation"],
+            ["Chapter file retrieval", "enabled" if settings.allow_direct_chapter_downloads else "disabled", "tracked title, approved domain, direct PDF/ZIP/CBZ, rights confirmation"],
+            ["Plugins", "enabled", "trusted local plugins return named Lily plans only"],
+            ["Shell and unrestricted filesystem", "disabled", "not exposed as Lily tools"],
+        ]
+        await rich.send(chat_id, [heading("Lily tool capability status", 2), table(rows), paragraph("Changing a host environment variable is not enough to bypass Lily’s admin, confirmation, repository, path, or source checks.")])
+        return "Displayed Lily’s enabled capability gates."
     if action == "list_managed_projects":
         projects = await db.list_managed_projects(user_id)
         if not projects:
@@ -493,6 +507,22 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
             return "That tracked series was not found. Add it first before recording a chapter update."
         await db.audit(chat_id, user_id, "update_tracked_series", {"series_id": item["id"], "title": item["title"], "last_chapter": item["last_chapter"]})
         return f"Updated `{item['title']}` to chapter {item['last_chapter']}. You can now ask Lily to prepare a channel announcement with the approved information."
+    if action == "download_chapter":
+        title = str(plan.args.get("title") or "").strip()
+        chapter = str(plan.args.get("chapter") or "").strip()
+        series = await db.get_tracked_series(chat_id, title) if title else None
+        if not series:
+            return "Track the series first so Lily has an approved title record; Lily does not search or scrape chapter sites."
+        async def chapter_progress(value: str) -> None:
+            await progress_message(update, value)
+        ctx = ToolContext(update=update, context=context, db=db, progress=chapter_progress)
+        try:
+            path = await tools.download_chapter_file(ctx, str(plan.args.get("url") or ""), series["title"], chapter, bool(plan.args.get("rights_confirmed")))
+        except (PermissionError, ValueError) as exc:
+            return str(exc)
+        await db.audit(chat_id, user_id, "download_chapter", {"series_id": series["id"], "title": series["title"], "chapter": chapter, "host": urlparse(str(plan.args.get("url") or "")).hostname})
+        await tools.send_output(ctx, path, f"Approved chapter file: {series['title']} — Chapter {chapter}")
+        return "Retrieved and delivered the approved chapter file."
     if action == "export_audit":
         events = await db.recent_audit(chat_id, limit=500)
         output = settings.work_dir / f"lily_audit_{chat_id}_{int(datetime.now(timezone.utc).timestamp())}.csv"

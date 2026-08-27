@@ -44,3 +44,7 @@
 - [x] Inspect Beasgohan-code/Manhua-Bot for its license, architecture, content catalog, posting, search, queue, metadata, and deployment patterns without running its code.
 - [x] Reconcile every user-referenced repository into a license-aware capability matrix and independently implement only compatible high-value features in Lily.
 - [x] Implement an admin-managed, manual manga/manhwa/manhua release tracker with safe title normalization, chapter updates, listings, audit records, and no scraping or direct chapter downloads.
+- [ ] Inspect spyrae/kronos-agent-os and 2CoderOK/unoclaw for license, architecture, agent orchestration, tool security, deployment, and observability patterns without running their code.
+- [ ] Independently adapt only compatible agent-operating-system ideas into Lily while preserving confirmation gates, privacy-tier routing, project allow-lists, and no arbitrary remote shell.
+- [x] Add an approved-source chapter release workflow that validates a tracked title, chapter number, source URL, rights confirmation, file type, and configured allow-list before any direct file retrieval.
+- [x] Add safe agent-tool capability gates and a read-only tool-status view informed by the referenced agent architectures; do not add arbitrary shell, unrestricted filesystem, or free-form network tools.

@@ -231,6 +231,47 @@ class LilyTools:
                         handle.write(chunk)
         return output
 
+    async def download_chapter_file(self, ctx: ToolContext, url: str, title: str, chapter: str, rights_confirmed: bool) -> Path:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme not in {"http", "https"} or not host:
+            raise ValueError("Use a direct HTTPS URL to a chapter file from an approved source.")
+        if not rights_confirmed:
+            raise PermissionError("Lily needs an explicit confirmation that you have rights to distribute this chapter file.")
+        if not settings.allow_direct_chapter_downloads:
+            raise PermissionError("Chapter file retrieval is disabled. An administrator must enable it on the production host after approving lawful sources.")
+        if not settings.allowed_chapter_domains or not any(host == domain or host.endswith("." + domain) for domain in settings.allowed_chapter_domains):
+            raise PermissionError("This chapter source is not on LILY_ALLOWED_CHAPTER_DOMAINS.")
+        safe_title = safe_filename(title, "series")
+        safe_chapter = safe_filename(chapter, "chapter")
+        suffix = Path(parsed.path).suffix.lower()
+        if suffix not in {".pdf", ".cbz", ".zip"}:
+            suffix = ".bin"
+        output = settings.download_dir / f"{safe_title}_chapter_{safe_chapter}{suffix}"
+        total = 0
+        allowed_types = {"application/pdf", "application/zip", "application/x-cbz", "application/vnd.comicbook+zip"}
+        await ctx.progress("Retrieving the approved chapter file…")
+        try:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(90.0, connect=10.0)) as client:
+                async with client.stream("GET", url) as response:
+                    response.raise_for_status()
+                    content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
+                    if content_type not in allowed_types:
+                        raise ValueError("The source did not return an approved PDF, ZIP, or CBZ chapter file.")
+                    content_length = int(response.headers.get("content-length", "0") or 0)
+                    if content_length > settings.max_file_bytes:
+                        raise ValueError("The chapter file exceeds Lily’s configured size limit.")
+                    with output.open("wb") as handle:
+                        async for chunk in response.aiter_bytes(1024 * 1024):
+                            total += len(chunk)
+                            if total > settings.max_file_bytes:
+                                raise ValueError("The chapter file exceeded Lily’s configured size limit.")
+                            handle.write(chunk)
+        except Exception:
+            output.unlink(missing_ok=True)
+            raise
+        return output
+
     async def send_output(self, ctx: ToolContext, path: Path, caption: str) -> None:
         if not path.exists():
             raise FileNotFoundError(str(path))
