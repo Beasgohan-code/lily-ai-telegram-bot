@@ -66,13 +66,15 @@ Search results are stored in short-lived, owner-bound pagination sessions. Lily 
 
 ## AI-first group controls
 
-Lily now ships a **60-control group-management catalogue** that an admin operates in normal language. The categories cover member governance, member moderation, content locks, anti-spam, rules and automations, and privacy/intelligence. Examples include: “Enable caps control”, “Disable forward lock”, “Trust this member”, “Block domain example.com”, “Show group controls”, “Show open reports”, “Resolve report 12”, and “Approve join request for 123456789”. Member-affecting actions, policy changes, mass deletion, and join decisions remain confirmation-gated and Lily also checks its own Telegram rights before execution.
+Lily now ships a **64-control group-management catalogue** that an admin operates in normal language. The categories cover member governance, member moderation, content locks, anti-spam, rules and automations, and privacy/intelligence. Examples include: “Enable caps control”, “Disable forward lock”, “Trust this member”, “Block domain example.com”, “Show group controls”, “Show open reports”, “Resolve report 12”, and “Approve join request for 123456789”. Member-affecting actions, policy changes, mass deletion, and join decisions remain confirmation-gated and Lily also checks its own Telegram rights before execution.
 
 The current live policy engine enforces locks, forwarded-message restrictions, blocked domains, duplicate text, caps spam, excessive mentions, invite-link and emoji limits, suspicious-text reporting, media flooding, new-member cooldown and limits, filters, flood control, trusted-member exemptions, configurable warning escalation, reports, case notes, member verification, welcome/goodbye flows, and audit events. Scheduled posts, recurring summaries, and inactivity alerts remain persisted controls awaiting an always-on scheduler.
 
 ## Expanded agent tools
 
 Lily now supports richer Rose-style operations through ordinary language: promote, demote, ban, unban, kick, mute, temporary text-only or read-only restrictions, restore permissions, warn, inspect and clear warnings, configure a bounded warning-to-restriction escalation, pin and unpin, purge, filters, locks, rules, welcome/goodbye configuration, member verification, trusted members, domain blocks, reports, private moderator case notes, polls, and group diagnostics. A confirmation gate remains mandatory for risky changes. The promotion profile intentionally omits promotion rights, so a newly promoted moderator cannot promote other accounts. The `auto_rename_enabled` and `auto_rename_template` chat settings can rename bare uploads automatically; source extensions are preserved and invalid filename characters are removed.
+
+Additional group-management skills now include group-wide **read-only mode** and normal-participation restoration, limited or expiring invite links, revocation of bot-created invite links, forum-topic creation and lifecycle management, an administrator roster, and current member count. All state-changing operations are treated as dangerous and require the requesting administrator’s explicit confirmation. Lily calls only fixed Telegram API methods for these skills and records a compact audit event; it does not construct shell commands or permit role-specific tool access. Forum actions need a forum-enabled chat and the bot’s topic-management right. Default-permission changes require the bot’s member-restriction right, while invite-link operations require the relevant invitation right.[1]
 
 For streaming, reply to a Lily-managed file and ask for a direct streaming link. Lily downloads the file to managed storage, generates an expiring HMAC-signed URL, and exposes it through the optional FastAPI stream service. Set `LILY_STREAM_PUBLIC_BASE_URL` to an HTTPS reverse-proxy URL before enabling this feature. Do not expose the stream port directly to the internet or use it for files outside Lily’s managed work/download directories.
 
@@ -171,6 +173,14 @@ Lily, ban this user for repeated scam links.
 Lily, restrict user 123456789 to text only for one hour.
 Lily, set the welcome message to Read the rules, {user}.
 Lily, enable member verification for new members.
+Lily, lock this group.
+Lily, unlock this group.
+Lily, create invite link named weekend for 20 members expires 24 hours.
+Lily, revoke invite link https://t.me/+exampleInvite.
+Lily, create forum topic called Releases.
+Lily, close this topic.
+Lily, show admins.
+Lily, how many members are here?
 Lily, add a case note for report 7 saying review a repeated violation.
 Lily, create a skill: when someone says “drop the link”, ask an admin before deleting the message.
 Lily, register bot manga-bot from https://github.com/example/manga-bot with python-main entrypoint bot.py.

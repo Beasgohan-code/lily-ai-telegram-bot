@@ -25,6 +25,8 @@ def visible_stages(action: str, risk: str, missing: list[str], requires_confirma
         stages.append("Check repository allow-list, project isolation, and fixed runtime profile")
     elif action in {"ban_user", "kick_user", "mute_user", "restrict_user", "delete_message", "purge_messages"}:
         stages.append("Check moderator authority and the exact chat target")
+    elif action in {"set_group_default_permissions", "create_invite_link", "revoke_invite_link", "create_forum_topic", "close_forum_topic", "reopen_forum_topic", "delete_forum_topic", "list_administrators", "group_member_count"}:
+        stages.append("Check administrator authority and the exact group scope")
     else:
         stages.append("Prepare the selected named Lily tool")
     if requires_confirmation or risk in {"risky", "dangerous"}:

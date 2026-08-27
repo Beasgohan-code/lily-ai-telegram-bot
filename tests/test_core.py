@@ -565,10 +565,13 @@ class LilyCoreTests(unittest.TestCase):
         asyncio.run(run())
 
     def test_group_control_catalogue_has_sixty_plus_controls(self):
-        self.assertGreaterEqual(len(GROUP_CONTROLS), 60)
+        self.assertGreaterEqual(len(GROUP_CONTROLS), 64)
         self.assertIn("domain_blocklist", GROUP_CONTROL_MAP)
         self.assertIn("join_request_review", GROUP_CONTROL_MAP)
         self.assertIn("daily_digest", GROUP_CONTROL_MAP)
+        self.assertIn("default_member_permissions", GROUP_CONTROL_MAP)
+        self.assertIn("invite_link_management", GROUP_CONTROL_MAP)
+        self.assertIn("forum_topic_management", GROUP_CONTROL_MAP)
 
     def test_group_control_policy_and_moderation_records_persist(self):
         async def run():
@@ -611,6 +614,44 @@ class LilyCoreTests(unittest.TestCase):
         self.assertEqual(goodbye.action, "set_goodbye")
         case_note = client.heuristic_plan("Lily add a case note for report 7 saying review next incident", {"chat_type": "group", "reply": {}})
         self.assertEqual(case_note.action, "add_case_note")
+
+    def test_heuristic_router_understands_new_bounded_group_management_skills(self):
+        client = AIClient()
+        read_only = client.heuristic_plan("Lily lock this group", {"chat_type": "group", "reply": {}})
+        self.assertEqual(read_only.action, "set_group_default_permissions")
+        self.assertEqual(read_only.args["mode"], "read_only")
+        self.assertTrue(read_only.requires_confirmation)
+        restore = client.heuristic_plan("Lily unlock this group", {"chat_type": "group", "reply": {}})
+        self.assertEqual(restore.action, "set_group_default_permissions")
+        self.assertEqual(restore.args["mode"], "normal")
+        invite = client.heuristic_plan("Lily create invite link named weekend for 20 members expires 24 hours", {"chat_type": "group", "reply": {}})
+        self.assertEqual(invite.action, "create_invite_link")
+        self.assertTrue(invite.requires_confirmation)
+        revoke = client.heuristic_plan("Lily revoke invite link https://t.me/+exampleInvite", {"chat_type": "group", "reply": {}})
+        self.assertEqual(revoke.action, "revoke_invite_link")
+        self.assertTrue(revoke.requires_confirmation)
+        topic = client.heuristic_plan("Lily create forum topic called Releases", {"chat_type": "supergroup", "reply": {}})
+        self.assertEqual(topic.action, "create_forum_topic")
+        self.assertEqual(topic.args["name"], "Releases")
+        self.assertTrue(topic.requires_confirmation)
+        close = client.heuristic_plan("Lily close this topic", {"chat_type": "supergroup", "message_thread_id": 42, "reply": {}})
+        self.assertEqual(close.action, "close_forum_topic")
+        self.assertEqual(close.args["message_thread_id"], 42)
+        self.assertTrue(close.requires_confirmation)
+        roster = client.heuristic_plan("Lily show admins", {"chat_type": "group", "reply": {}})
+        self.assertEqual(roster.action, "list_administrators")
+        count = client.heuristic_plan("Lily how many members are here", {"chat_type": "group", "reply": {}})
+        self.assertEqual(count.action, "group_member_count")
+        self.assertEqual(assign_roles(topic).primary.slug, "community-moderator")
+
+    def test_new_group_management_actions_cannot_lower_confirmation_or_scope_requirements(self):
+        unsafe = Plan.from_dict({"action": "delete_forum_topic", "risk": "safe", "requires_confirmation": False, "args": {}, "missing": []})
+        self.assertEqual(unsafe.risk, "dangerous")
+        self.assertTrue(unsafe.requires_confirmation)
+        self.assertIn("message thread ID", unsafe.missing[0])
+        revoke = Plan.from_dict({"action": "revoke_invite_link", "risk": "safe", "requires_confirmation": False, "args": {}, "missing": []})
+        self.assertTrue(revoke.requires_confirmation)
+        self.assertIn("invite link", revoke.missing[0])
 
     def test_heuristic_router_understands_media_and_audit_tools(self):
         client = AIClient()

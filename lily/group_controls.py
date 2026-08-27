@@ -34,6 +34,10 @@ GROUP_CONTROLS = tuple(
         ("member_restrictions", "Member restrictions", "Apply granular Telegram sending permissions.", True, "dangerous"),
         ("member_exemptions", "Member exemptions", "Record members exempt from selected automatic controls.", False, "dangerous"),
         ("staff_notifications", "Staff notifications", "Notify admins about serious automated actions.", True, "risky"),
+        ("default_member_permissions", "Default member permissions", "Set the group-wide default to normal participation or read-only.", False, "dangerous"),
+        ("invite_link_management", "Invite link management", "Create or revoke bounded administrator-approved invite links.", False, "dangerous"),
+        ("forum_topic_management", "Forum topic management", "Create, close, reopen, or remove forum topics in topic-enabled groups.", False, "dangerous"),
+        ("administrator_roster", "Administrator roster", "Allow admins to inspect the current administrator roster and member count.", True, "risky"),
     ])
     + _controls("Member moderation", [
         ("warn", "Warnings", "Record a rule warning against a member.", True, "risky"),

@@ -118,9 +118,10 @@ _ACTION_ROLE = {
     "queue_status": "queue-coordinator", "queue_list": "queue-coordinator", "cancel_queue_job": "queue-coordinator",
     "register_managed_project": "service-operator", "provision_managed_project": "service-operator", "project_env_schema": "service-operator", "project_run_profiles": "service-operator",
     "generate_image": "channel-editor", "generate_video": "media-engineer", "create_file": "documentation-writer",
+    "set_group_default_permissions": "community-moderator", "create_invite_link": "community-moderator", "revoke_invite_link": "community-moderator", "create_forum_topic": "community-moderator", "close_forum_topic": "community-moderator", "reopen_forum_topic": "community-moderator", "delete_forum_topic": "community-moderator", "list_administrators": "community-moderator", "group_member_count": "community-moderator",
 }
 
-_MODERATION_ACTIONS = {"ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "restrict_user", "unrestrict_user", "demote_user", "promote_user", "delete_message", "purge_messages", "warn_user", "add_filter", "remove_filter", "set_lock", "set_group_rules", "set_welcome", "set_goodbye", "set_verification", "configure_group_control", "configure_warning_escalation", "approve_join_request", "decline_join_request"}
+_MODERATION_ACTIONS = {"ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "restrict_user", "unrestrict_user", "demote_user", "promote_user", "delete_message", "purge_messages", "warn_user", "add_filter", "remove_filter", "set_lock", "set_group_rules", "set_welcome", "set_goodbye", "set_verification", "configure_group_control", "configure_warning_escalation", "approve_join_request", "decline_join_request", "set_group_default_permissions", "create_invite_link", "revoke_invite_link", "create_forum_topic", "close_forum_topic", "reopen_forum_topic", "delete_forum_topic", "list_administrators", "group_member_count"}
 
 
 def catalog(division: str | None = None) -> list[dict[str, str]]:

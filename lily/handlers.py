@@ -49,7 +49,7 @@ ADMIN_ACTIONS = {
     "tool_capabilities",
     "show_operating_skills",
     "mangadex_search", "mangadex_feed",
-    "member_profile", "set_chat_title", "set_chat_description",
+    "member_profile", "set_chat_title", "set_chat_description", "set_group_default_permissions", "create_invite_link", "revoke_invite_link", "create_forum_topic", "close_forum_topic", "reopen_forum_topic", "delete_forum_topic", "list_administrators", "group_member_count",
 }
 
 
@@ -103,6 +103,9 @@ def _reply_context(update: Update) -> dict[str, Any]:
             result["reply"].update(file_info)
     if message:
         result["message_to_act_on"] = message.message_id
+        thread_id = getattr(message, "message_thread_id", None)
+        if thread_id:
+            result["message_thread_id"] = int(thread_id)
     return result
 
 
@@ -514,6 +517,83 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         await update.get_bot().set_chat_description(chat_id, description)
         await db.audit(chat_id, user_id, "set_chat_description", {"length": len(description)})
         return "Updated the group description."
+    if action == "set_group_default_permissions":
+        mode = str(plan.args.get("mode") or "normal").lower()
+        read_only = mode == "read_only"
+        permissions = {
+            "can_send_messages": not read_only,
+            "can_send_audios": not read_only,
+            "can_send_documents": not read_only,
+            "can_send_photos": not read_only,
+            "can_send_videos": not read_only,
+            "can_send_video_notes": not read_only,
+            "can_send_voice_notes": not read_only,
+            "can_send_polls": not read_only,
+            "can_send_other_messages": not read_only,
+            "can_add_web_page_previews": not read_only,
+            "can_change_info": False,
+            "can_invite_users": not read_only,
+            "can_pin_messages": False,
+            "can_manage_topics": False,
+        }
+        await rich.call("setChatPermissions", {"chat_id": chat_id, "permissions": permissions, "use_independent_chat_permissions": True})
+        await db.update_chat_settings(chat_id, {"default_member_permissions_mode": "read_only" if read_only else "normal"}, update.effective_chat.title or "")
+        await db.set_control(chat_id, "default_member_permissions", read_only, update.effective_chat.title or "")
+        await db.audit(chat_id, user_id, "set_group_default_permissions", {"mode": "read_only" if read_only else "normal"})
+        return "Regular members are now read-only." if read_only else "Normal member participation permissions were restored."
+    if action == "create_invite_link":
+        member_limit = max(0, min(int(plan.args.get("member_limit") or 0), 99_999))
+        expire_hours = max(0, min(int(plan.args.get("expire_hours") or 0), 168))
+        name = str(plan.args.get("name") or "").strip()[:32]
+        payload: dict[str, Any] = {"chat_id": chat_id}
+        if name:
+            payload["name"] = name
+        if member_limit:
+            payload["member_limit"] = member_limit
+        if expire_hours:
+            payload["expire_date"] = int(datetime.now(timezone.utc).timestamp()) + expire_hours * 3600
+        result = await rich.call("createChatInviteLink", payload)
+        link = str(result.get("invite_link") or "") if isinstance(result, dict) else ""
+        await db.set_control(chat_id, "invite_link_management", True, update.effective_chat.title or "")
+        await db.audit(chat_id, user_id, "create_invite_link", {"name": name, "member_limit": member_limit, "expire_hours": expire_hours})
+        return f"Created invite link: {link}" if link else "Created a bounded group invite link."
+    if action == "revoke_invite_link":
+        invite_link = str(plan.args.get("invite_link") or "").strip()
+        if not re.fullmatch(r"https://t\.me/\S{3,512}", invite_link):
+            return "Provide the full Telegram invite link that Lily should revoke."
+        await rich.call("revokeChatInviteLink", {"chat_id": chat_id, "invite_link": invite_link})
+        await db.set_control(chat_id, "invite_link_management", True, update.effective_chat.title or "")
+        await db.audit(chat_id, user_id, "revoke_invite_link", {"invite_link_redacted": True})
+        return "The specified invite link was revoked."
+    if action == "create_forum_topic":
+        name = str(plan.args.get("name") or "").strip()[:128]
+        result = await rich.call("createForumTopic", {"chat_id": chat_id, "name": name})
+        thread_id = int(result.get("message_thread_id") or 0) if isinstance(result, dict) else 0
+        await db.set_control(chat_id, "forum_topic_management", True, update.effective_chat.title or "")
+        await db.audit(chat_id, user_id, "create_forum_topic", {"name": name, "message_thread_id": thread_id})
+        return f"Created forum topic `{name}`." if not thread_id else f"Created forum topic `{name}` (thread {thread_id})."
+    if action in {"close_forum_topic", "reopen_forum_topic", "delete_forum_topic"}:
+        thread_id = int(plan.args.get("message_thread_id") or 0)
+        methods = {"close_forum_topic": "closeForumTopic", "reopen_forum_topic": "reopenForumTopic", "delete_forum_topic": "deleteForumTopic"}
+        await rich.call(methods[action], {"chat_id": chat_id, "message_thread_id": thread_id})
+        await db.set_control(chat_id, "forum_topic_management", True, update.effective_chat.title or "")
+        await db.audit(chat_id, user_id, action, {"message_thread_id": thread_id})
+        return {"close_forum_topic": "The forum topic was closed.", "reopen_forum_topic": "The forum topic was reopened.", "delete_forum_topic": "The forum topic was deleted."}[action]
+    if action == "list_administrators":
+        members = await update.get_bot().get_chat_administrators(chat_id)
+        rows = [["Administrator", "Role"]]
+        for member in members[:50]:
+            label = member.user.full_name[:100]
+            rows.append([label, "Owner" if member.status == "creator" else "Administrator"])
+        await db.set_control(chat_id, "administrator_roster", True, update.effective_chat.title or "")
+        await db.audit(chat_id, user_id, "list_administrators", {"count": len(members)})
+        await rich.send(chat_id, [heading("Group administrators", 2), table(rows, compact=True)], reply_to=update.effective_message.message_id)
+        return f"Displayed {len(members)} group administrator(s)."
+    if action == "group_member_count":
+        count = await update.get_bot().get_chat_member_count(chat_id)
+        await db.set_control(chat_id, "administrator_roster", True, update.effective_chat.title or "")
+        await db.audit(chat_id, user_id, "group_member_count", {"count": count})
+        return f"This group currently has {count} member(s)."
     if action == "explain_message":
         message_text = str(plan.args.get("message_text") or "").strip()
         settings_for_chat = await db.get_chat_settings(chat_id, update.effective_chat.title or "")

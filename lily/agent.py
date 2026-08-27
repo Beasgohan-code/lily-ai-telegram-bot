@@ -28,14 +28,14 @@ ACTIONS = {
     "tool_capabilities",
     "show_operating_skills",
     "mangadex_search", "mangadex_feed",
-    "member_profile", "set_chat_title", "set_chat_description",
+    "member_profile", "set_chat_title", "set_chat_description", "set_group_default_permissions", "create_invite_link", "revoke_invite_link", "create_forum_topic", "close_forum_topic", "reopen_forum_topic", "delete_forum_topic", "list_administrators", "group_member_count",
 }
 
 RISK = {"safe", "risky", "dangerous"}
 RISK_LEVEL = {"safe": 0, "risky": 1, "dangerous": 2}
 ACTION_MIN_RISK = {
     "ban_user": "dangerous", "kick_user": "dangerous", "mute_user": "dangerous", "restrict_user": "dangerous", "delete_message": "dangerous", "purge_messages": "dangerous",
-    "set_chat_title": "dangerous", "set_chat_description": "dangerous", "forget_memory": "risky",
+    "set_chat_title": "dangerous", "set_chat_description": "dangerous", "forget_memory": "risky", "set_group_default_permissions": "dangerous", "create_invite_link": "dangerous", "revoke_invite_link": "dangerous", "create_forum_topic": "dangerous", "close_forum_topic": "dangerous", "reopen_forum_topic": "dangerous", "delete_forum_topic": "dangerous",
 }
 CONFIRM_ACTIONS = {action for action, risk in ACTION_MIN_RISK.items() if risk != "safe"} | {"download_song", "download_chapter", "register_managed_project", "provision_managed_project", "create_poll", "set_auto_rename", "track_series", "update_tracked_series"}
 TARGET_ACTIONS = {"ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "restrict_user", "unrestrict_user", "demote_user", "promote_user", "warn_user", "member_profile", "show_warnings"}
@@ -69,6 +69,12 @@ class Plan:
             self.missing = list(dict.fromkeys([*self.missing, "Provide the new group title"]))[:8]
         if self.action == "set_chat_description" and not str(self.args.get("description") or "").strip():
             self.missing = list(dict.fromkeys([*self.missing, "Provide the new group description"]))[:8]
+        if self.action == "create_forum_topic" and not str(self.args.get("name") or "").strip():
+            self.missing = list(dict.fromkeys([*self.missing, "Provide a forum topic name"]))[:8]
+        if self.action in {"close_forum_topic", "reopen_forum_topic", "delete_forum_topic"} and not self.args.get("message_thread_id"):
+            self.missing = list(dict.fromkeys([*self.missing, "Reply inside the forum topic or provide its numeric message thread ID"]))[:8]
+        if self.action == "revoke_invite_link" and not str(self.args.get("invite_link") or "").strip():
+            self.missing = list(dict.fromkeys([*self.missing, "Provide the invite link Lily should revoke"]))[:8]
         return self
 
     @classmethod
@@ -164,7 +170,7 @@ Never call tools yourself. Output only the JSON schema.
 Available actions: {', '.join(sorted(ACTIONS))}.
 Dangerous actions include banning, kicking, muting, deleting, pinning, changing rules/settings, publishing or deleting channel posts, external downloads, and expensive or large file processing.
 Set requires_confirmation=true for any risky or dangerous action. Require an explicit reply target or numeric user id for moderation. For download_song, require a direct permitted URL and include rights_confirmed=false until the user explicitly confirms they have permission.
-		For create_skill, put a structured trigger in args.trigger and a structured action in args.action; use args.execution_mode as auto or suggest, args.confirmation as never/risky/always, bounded args.cooldown_seconds (0–86400), and args.priority (0–1000). Only a fixed safe reply action may use automatic mode with confirmation never; all other skills must preserve confirmation. For create_poll, use args.question, args.options (2–10 strings), and optional args.anonymous. For add_filter, use args.trigger and optional args.response/delete_message/warn. For set_lock, use args.content_type and args.enabled. For configure_group_control, use args.control and args.enabled. For configure_warning_escalation, use a bounded args.threshold and args.seconds. For trusted_member, set args.user_id and args.trusted. For block_domain, set args.domain and args.blocked. For set_welcome/set_goodbye use args.enabled and args.text. For restrict_user use args.user_id, args.mode (read_only or text_only), and bounded args.seconds. For add_case_note use args.note and optional args.report_id/args.user_id. For save_note, use args.name and args.content. For search_posts, use args.channel_id and args.query. For plugin_reply, use args.text. For create_code_project, use a short args.project, args.language from python/javascript/typescript/html/css/json/yaml/bash/java/csharp/go/rust, and an args.brief. This only creates a Lily-owned source workspace and sends a ZIP; it never runs generated code or accepts shell commands. For code_project_status, optionally use args.job_id. For cancel_code_project, require an exact args.job_id and preserve requester-scoped cancellation.
+		For create_skill, put a structured trigger in args.trigger and a structured action in args.action; use args.execution_mode as auto or suggest, args.confirmation as never/risky/always, bounded args.cooldown_seconds (0–86400), and args.priority (0–1000). Only a fixed safe reply action may use automatic mode with confirmation never; all other skills must preserve confirmation. For create_poll, use args.question, args.options (2–10 strings), and optional args.anonymous. For add_filter, use args.trigger and optional args.response/delete_message/warn. For set_lock, use args.content_type and args.enabled. For configure_group_control, use args.control and args.enabled. For configure_warning_escalation, use a bounded args.threshold and args.seconds. For trusted_member, set args.user_id and args.trusted. For block_domain, set args.domain and args.blocked. For set_welcome/set_goodbye use args.enabled and args.text. For restrict_user use args.user_id, args.mode (read_only or text_only), and bounded args.seconds. For set_group_default_permissions, use args.mode as read_only or normal. For create_invite_link, accept optional args.name (max 32), args.member_limit (1–99999), and args.expire_hours (1–168); never set both member_limit and join-request mode. For revoke_invite_link, require args.invite_link. For create_forum_topic, require args.name (max 128). For close_forum_topic, reopen_forum_topic, and delete_forum_topic, require args.message_thread_id. For add_case_note use args.note and optional args.report_id/args.user_id. For save_note, use args.name and args.content. For search_posts, use args.channel_id and args.query. For plugin_reply, use args.text. For create_code_project, use a short args.project, args.language from python/javascript/typescript/html/css/json/yaml/bash/java/csharp/go/rust, and an args.brief. This only creates a Lily-owned source workspace and sends a ZIP; it never runs generated code or accepts shell commands. For code_project_status, optionally use args.job_id. For cancel_code_project, require an exact args.job_id and preserve requester-scoped cancellation.
 	Group settings: {json.dumps(chat_settings, ensure_ascii=False)}
 	Recent memory: {json.dumps(memories, ensure_ascii=False)}
 	Curated operating policy: {planning_policy()}
@@ -382,6 +388,31 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
         if any(word in low for word in ("set verification", "enable verification", "disable verification")):
             enabled = not any(word in low for word in ("disable", "turn off", "stop"))
             return Plan(intent="set_verification", summary=f"{'Enable' if enabled else 'Disable'} member verification", action="set_verification", risk="dangerous", requires_confirmation=True, args={"enabled": enabled}, confidence=0.85)
+        if any(phrase in low for phrase in ("unlock the group", "unlock this group", "restore group permissions", "make the group normal")):
+            return Plan(intent="set_group_default_permissions", summary="Restore normal group member permissions", action="set_group_default_permissions", risk="dangerous", requires_confirmation=True, args={"mode": "normal"}, confidence=0.9).enforce_safety()
+        if any(phrase in low for phrase in ("lock the group", "lock this group", "make the group read only", "make this group read only", "group read only")):
+            return Plan(intent="set_group_default_permissions", summary="Make the group read-only for regular members", action="set_group_default_permissions", risk="dangerous", requires_confirmation=True, args={"mode": "read_only"}, confidence=0.9).enforce_safety()
+        if any(phrase in low for phrase in ("list admins", "show admins", "administrator roster", "admin roster")):
+            return Plan(intent="list_administrators", summary="Show the current administrator roster", action="list_administrators", risk="safe", confidence=0.9)
+        if any(phrase in low for phrase in ("member count", "how many members", "group size")):
+            return Plan(intent="group_member_count", summary="Show the current group member count", action="group_member_count", risk="safe", confidence=0.9)
+        if any(phrase in low for phrase in ("create invite link", "make invite link", "new invite link")):
+            limit_match = re.search(r"\b(?:limit|for)\s*(\d{1,5})\s*(?:member|members|people)?", low)
+            hours_match = re.search(r"\b(?:expire|expires|for)\s*(\d{1,3})\s*(?:hour|hours|hr|hrs)\b", low)
+            name_match = re.search(r"(?:named|called|name)\s+[\"']?([^\"']{1,32})", value, re.I)
+            return Plan(intent="create_invite_link", summary="Create a bounded group invite link", action="create_invite_link", risk="dangerous", requires_confirmation=True, args={"name": name_match.group(1).strip() if name_match else "", "member_limit": int(limit_match.group(1)) if limit_match else 0, "expire_hours": int(hours_match.group(1)) if hours_match else 0}, confidence=0.85).enforce_safety()
+        if any(phrase in low for phrase in ("revoke invite link", "disable invite link", "delete invite link")):
+            invite = next(iter(re.findall(r"https?://t\.me/\S+", value, re.I)), "")
+            return Plan(intent="revoke_invite_link", summary="Revoke a group invite link", action="revoke_invite_link", risk="dangerous", requires_confirmation=True, args={"invite_link": invite}, confidence=0.85).enforce_safety()
+        if any(phrase in low for phrase in ("create forum topic", "create topic", "new forum topic")):
+            name = re.sub(r"^.*?(?:create\s+(?:a\s+)?(?:forum\s+)?topic|new\s+forum\s+topic)\s*(?:called|named|:)?\s*", "", value, flags=re.I).strip()
+            return Plan(intent="create_forum_topic", summary="Create a forum topic", action="create_forum_topic", risk="dangerous", requires_confirmation=True, args={"name": name[:128]}, confidence=0.85).enforce_safety()
+        if any(phrase in low for phrase in ("close forum topic", "close this topic")):
+            return Plan(intent="close_forum_topic", summary="Close the selected forum topic", action="close_forum_topic", risk="dangerous", requires_confirmation=True, args={"message_thread_id": int(context.get("message_thread_id") or 0)}, confidence=0.85).enforce_safety()
+        if any(phrase in low for phrase in ("reopen forum topic", "reopen this topic")):
+            return Plan(intent="reopen_forum_topic", summary="Reopen the selected forum topic", action="reopen_forum_topic", risk="dangerous", requires_confirmation=True, args={"message_thread_id": int(context.get("message_thread_id") or 0)}, confidence=0.85).enforce_safety()
+        if any(phrase in low for phrase in ("delete forum topic", "delete this topic")):
+            return Plan(intent="delete_forum_topic", summary="Delete the selected forum topic", action="delete_forum_topic", risk="dangerous", requires_confirmation=True, args={"message_thread_id": int(context.get("message_thread_id") or 0)}, confidence=0.85).enforce_safety()
         if any(word in low for word in ("group controls", "control status", "show moderation settings", "show group settings")):
             return Plan(intent="group_controls_status", summary="Show group control status", action="group_controls_status", risk="safe", confidence=0.9)
         if any(word in low for word in ("group diagnostics", "moderation health", "group health", "verification queue")):
