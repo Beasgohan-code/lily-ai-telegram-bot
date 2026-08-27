@@ -39,3 +39,5 @@
 - [x] Implement an environment-schema parser and secure `.env` renderer with value validation, redacted status, atomic writes, and mode 0600.
 - [x] Implement dependency-install planning that permits only requirements.txt, pyproject.toml, package.json, or a reviewed custom command selected from a supported allow-list.
 - [x] Add dry-run project provisioning plans and confirmation-gated registry actions before any clone, install, environment write, or service creation.
+- [x] Inspect the referenced bot-host project’s architecture, license, project registry, install, start/stop, environment, and log patterns before independent adaptation.
+- [x] Adapt only safe, compatible bot-runner workflow concepts into Lily: explicit project manifests, controlled lifecycle actions, redacted logs, and confirmation-gated operations.

@@ -324,7 +324,7 @@ class LilyCoreTests(unittest.TestCase):
                 draft = factory.draft("manga-bot", "https://github.com/example/manga-bot", "python", "python-main", "bot.py")
                 plan = await factory.clone_and_install(draft)
                 self.assertTrue(plan["dry_run"])
-                self.assertEqual(plan["run"], ["python", "bot.py"])
+                self.assertEqual(plan["run"], [str(root / "projects" / "manga-bot" / ".venv" / "bin" / "python"), "bot.py"])
                 record = await factory.register_draft(draft, 42)
                 self.assertEqual(record["slug"], "manga-bot")
                 await database.save_project_env_schema("manga-bot", [{"name": "TELEGRAM_BOT_TOKEN", "required": True, "secret": True, "validation": "text"}])

@@ -9,9 +9,11 @@ confirmation before invoking any mutating method with ``dry_run=False``.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import re
 import shutil
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -216,10 +218,11 @@ class ManagedBotFactory:
 
     def install_plan(self, project_root: Path, runtime: str) -> list[str]:
         if runtime == "python":
+            venv_python = str(project_root / ".venv" / "bin" / "python")
             if (project_root / "requirements.txt").is_file():
-                return ["python", "-m", "pip", "install", "--no-input", "--disable-pip-version-check", "-r", "requirements.txt"]
+                return [venv_python, "-m", "pip", "install", "--no-input", "--disable-pip-version-check", "-r", "requirements.txt"]
             if (project_root / "pyproject.toml").is_file():
-                return ["python", "-m", "pip", "install", "--no-input", "--disable-pip-version-check", "."]
+                return [venv_python, "-m", "pip", "install", "--no-input", "--disable-pip-version-check", "."]
             raise BotFactoryError("Python projects need requirements.txt or pyproject.toml for automatic installation.")
         if runtime == "node":
             if not (project_root / "package.json").is_file():
@@ -235,14 +238,36 @@ class ManagedBotFactory:
     @staticmethod
     def run_command(draft: ManagedProjectDraft) -> list[str]:
         if draft.run_profile == "python-main":
-            return ["python", draft.run_target]
+            return [str(draft.project_root / ".venv" / "bin" / "python"), draft.run_target]
         if draft.run_profile == "python-module":
-            return ["python", "-m", draft.run_target]
+            return [str(draft.project_root / ".venv" / "bin" / "python"), "-m", draft.run_target]
         if draft.run_profile == "node-start":
             return ["npm", "run", "start"]
         if draft.run_profile == "docker-compose-up":
             return ["docker", "compose", "up"]
         raise BotFactoryError("Unsupported run profile.")
+
+    @staticmethod
+    def requirements_digest(requirements: Path) -> str:
+        digest = hashlib.sha256()
+        with requirements.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(65_536), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    @staticmethod
+    def requirements_marker(project_root: Path) -> Path:
+        return project_root / ".venv" / ".requirements.sha256"
+
+    async def _create_python_venv(self, project_root: Path) -> list[str]:
+        venv_python = project_root / ".venv" / "bin" / "python"
+        if venv_python.is_file():
+            return [str(venv_python), "-m", "pip", "--version"]
+        process = await asyncio.create_subprocess_exec(sys.executable, "-m", "venv", str(project_root / ".venv"), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        _, stderr = await process.communicate()
+        if process.returncode != 0 or not venv_python.is_file():
+            raise BotFactoryError(f"Could not create the private Python environment: {stderr.decode(errors='replace')[-300:]}")
+        return [str(venv_python), "-m", "pip", "--version"]
 
     async def register_draft(self, draft: ManagedProjectDraft, owner_id: int) -> dict[str, object]:
         record = await self.db.register_managed_project({
@@ -263,7 +288,7 @@ class ManagedBotFactory:
     async def clone_and_install(self, draft: ManagedProjectDraft, *, dry_run: bool | None = None) -> dict[str, object]:
         effective_dry_run = self.settings.bot_factory_dry_run if dry_run is None else dry_run
         if effective_dry_run:
-            return {"dry_run": True, "clone": ["git", "clone", "--depth", "1", "--branch", draft.branch, draft.repository_url, str(draft.project_root)], "install": "Resolve after clone", "run": self.run_command(draft)}
+            return {"dry_run": True, "clone": ["git", "clone", "--depth", "1", "--branch", draft.branch, draft.repository_url, str(draft.project_root)], "install": "Create .venv and resolve the approved manifest after clone", "run": self.run_command(draft)}
         if draft.project_root.exists():
             raise BotFactoryError("The managed project directory already exists; use the update workflow instead.")
         draft.project_root.parent.mkdir(parents=True, exist_ok=True)
@@ -272,11 +297,18 @@ class ManagedBotFactory:
         if clone.returncode != 0:
             shutil.rmtree(draft.project_root, ignore_errors=True)
             raise BotFactoryError(f"Repository clone failed: {clone_error.decode(errors='replace')[-300:]}")
+        if draft.runtime == "python":
+            await self._create_python_venv(draft.project_root)
         install = self.install_plan(draft.project_root, draft.runtime)
         process = await asyncio.create_subprocess_exec(*install, cwd=str(draft.project_root), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         _, install_error = await process.communicate()
         if process.returncode != 0:
             raise BotFactoryError(f"Dependency installation failed: {install_error.decode(errors='replace')[-300:]}")
+        requirements = draft.project_root / "requirements.txt"
+        if requirements.is_file():
+            marker = self.requirements_marker(draft.project_root)
+            marker.write_text(self.requirements_digest(requirements), encoding="utf-8")
+            os.chmod(marker, 0o600)
         return {"dry_run": False, "clone": "completed", "install": install, "run": self.run_command(draft)}
 
 
