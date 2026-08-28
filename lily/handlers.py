@@ -196,9 +196,16 @@ def normal_chat_permissions() -> ChatPermissions:
     return ChatPermissions(can_send_messages=True, can_send_audios=True, can_send_documents=True, can_send_photos=True, can_send_videos=True, can_send_video_notes=True, can_send_voice_notes=True, can_send_polls=True, can_send_other_messages=True, can_add_web_page_previews=True)
 
 
-async def send_error(update: Update, message: str) -> None:
-    if update.effective_chat:
-        await rich.send(update.effective_chat.id, [heading("I couldn’t complete that", 3), paragraph(message)], reply_to=update.effective_message.message_id if update.effective_message else None)
+async def send_error(update: Update, message: str, *, context: ContextTypes.DEFAULT_TYPE | None = None) -> None:
+    chat = update.effective_chat
+    if not chat:
+        return
+    session = active_session(context) if context else None
+    if session:
+        await session.finish()
+    elif settings.rich_live_previews:
+        await rich.clear_draft(chat.id, work_draft_id(update))
+    await rich.send(chat.id, [heading("I couldn’t complete that", 3), paragraph(message)], reply_to=update.effective_message.message_id if update.effective_message else None)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1232,7 +1239,7 @@ async def handle_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: 
         return
     if plan.action in ADMIN_ACTIONS and not await is_admin(update):
         await _finish_skill_plan(plan, "denied", "Current user is not permitted to run this skill")
-        await send_error(update, "Only a Telegram group admin or owner can use that action.")
+        await send_error(update, "Only a Telegram group admin or owner can use that action.", context=context)
         return
     if plan.action in {"rename_file", "compress_file", "encode_media", "stream_link"} and plan.args.get("source_file") is None:
         reply = _reply_context(update).get("reply", {})
@@ -1335,7 +1342,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     ok, reason = await db.charge_request(update.effective_user.id, update.effective_chat.id)
     if not ok:
-        await send_error(update, f"Your Lily quota is unavailable because the {reason}. Try again after the quota resets or ask the administrator to change the group limits.")
+        await send_error(update, f"Your Lily quota is unavailable because the {reason}. Try again after the quota resets or ask the administrator to change the group limits.", context=context)
         return
     if plugin_plan:
         await handle_plan(update, context, plugin_plan, settings_for_chat)
@@ -1468,7 +1475,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         result = await execute_plan(update, context, plan)
         await send_result(update, result, context=context)
     except Exception as exc:
-        await send_error(update, str(exc)[:1000])
+        await send_error(update, str(exc)[:1000], context=context)
 
 
 async def welcome_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1495,7 +1502,7 @@ async def on_stopped_generation(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     if isinstance(update, Update) and update.effective_chat:
-        await send_error(update, public_error_message())
+        await send_error(update, public_error_message(), context=context)
 
 
 def register_handlers(application: Application) -> None:

@@ -1266,6 +1266,49 @@ class LilyCoreTests(unittest.TestCase):
             ok = await client.draft(1, blocks, draft_id=42)
             self.assertTrue(ok)
             self.assertIn("sendMessageDraft", calls)
+            fallback_html = client._fallback_html(blocks)
+            self.assertNotIn("<i>", fallback_html)
+            self.assertIn("Thinking…", fallback_html)
+        asyncio.run(run())
+
+    def test_send_error_clears_live_session_and_draft(self):
+        from lily.handlers import send_error
+        from lily.live_session import LiveThinkingSession
+
+        class ChatStub:
+            id = 12345
+
+        class MessageStub:
+            message_id = 99
+
+        class UpdateStub:
+            update_id = 555
+            effective_chat = ChatStub()
+            effective_message = MessageStub()
+
+        class ContextStub:
+            user_data: dict[str, object] = {}
+
+        async def run():
+            context = ContextStub()
+            update = UpdateStub()
+            session = LiveThinkingSession(12345, "test-draft")
+            context.user_data["_live_thinking_session"] = session
+            session._active = True
+
+            with patch("lily.handlers.rich.send", new=AsyncMock()) as mock_send, patch("lily.handlers.rich.clear_draft", new=AsyncMock()) as mock_clear:
+                await send_error(update, "An error occurred", context=context)
+                self.assertFalse(session._active)
+                mock_send.assert_awaited_once()
+
+            # Verify send_error without active session clears draft when rich_live_previews is enabled
+            context.user_data.clear()
+            updated_settings = replace(settings, rich_live_previews=True)
+            with patch("lily.handlers.settings", updated_settings), patch("lily.handlers.rich.send", new=AsyncMock()) as mock_send, patch("lily.handlers.rich.clear_draft", new=AsyncMock()) as mock_clear:
+                await send_error(update, "An error occurred", context=context)
+                mock_clear.assert_awaited_once()
+                mock_send.assert_awaited_once()
+
         asyncio.run(run())
 
     def test_free_tools_heuristics(self):

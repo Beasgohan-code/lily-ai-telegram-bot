@@ -320,7 +320,7 @@ class RichClient:
                 inner = self._fallback_html(block.get("blocks", []))
                 parts.append(f"<b>{self._escape(self._plain(block.get('summary', '')))}</b>\n{inner}")
             elif kind == "thinking":
-                parts.append("<i>Thinking…</i>")
+                parts.append("Thinking…")
             else:
                 parts.append(self._escape(self._plain(block.get("text", ""))))
         return "\n\n".join(parts)[:4090]
