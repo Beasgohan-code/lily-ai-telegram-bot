@@ -113,19 +113,21 @@ class ModelRouter:
         return request
 
     async def _mark_failure(self, profile: ModelProfile, error: Exception) -> None:
-        state = self.health[profile.key_id]
-        state.failures += 1
-        state.last_error = str(error)[:300]
-        delay = min(self.cooldown_max, self.cooldown_base * (2 ** min(state.failures - 1, 6)))
-        state.cooldown_until = time.monotonic() + delay
+        async with self._lock:
+            state = self.health[profile.key_id]
+            state.failures += 1
+            state.last_error = str(error)[:300]
+            delay = min(self.cooldown_max, self.cooldown_base * (2 ** min(state.failures - 1, 6)))
+            state.cooldown_until = time.monotonic() + delay
 
     async def _mark_success(self, profile: ModelProfile, latency_ms: float) -> None:
-        state = self.health[profile.key_id]
-        state.successes += 1
-        state.failures = 0
-        state.cooldown_until = 0.0
-        state.last_error = ""
-        state.last_latency_ms = latency_ms
+        async with self._lock:
+            state = self.health[profile.key_id]
+            state.successes += 1
+            state.failures = 0
+            state.cooldown_until = 0.0
+            state.last_error = ""
+            state.last_latency_ms = latency_ms
 
     @staticmethod
     def _plain_messages(messages: list[dict[str, Any]]) -> str:
