@@ -98,8 +98,18 @@ def activity_status(stage: str) -> dict[str, Any]:
     return details("Lily activity", [paragraph(str(stage)[:400])], is_open=False)
 
 
+def thinking_only_blocks(status: str = "Thinking…") -> list[dict[str, Any]]:
+    """Minimal tg-thinking preview — no headings, stages, or extra chat noise."""
+    blocks: list[dict[str, Any]] = [thinking()]
+    if status:
+        blocks.append(paragraph(str(status)[:120]))
+    return blocks
+
+
 def thinking_blocks(summary: str, status: str) -> list[dict[str, Any]]:
     """Public AI activity card — never exposes private model reasoning."""
+    if settings.compact_responses:
+        return thinking_only_blocks(status or summary)
     return [
         heading("Lily", 3),
         thinking(),
@@ -110,6 +120,8 @@ def thinking_blocks(summary: str, status: str) -> list[dict[str, Any]]:
 
 def live_activity_blocks(summary: str, stages: list[str], status: str, *, show_thinking: bool = False) -> list[dict[str, Any]]:
     """Build a safe draft payload that never contains model reasoning or raw commands."""
+    if settings.compact_responses:
+        return thinking_only_blocks(status or summary)
     blocks: list[dict[str, Any]] = [heading("Lily", 3)]
     if show_thinking:
         blocks.append(thinking())
@@ -235,8 +247,42 @@ class RichClient:
         text = self._fallback_html(blocks)
         return await self.message_draft(chat_id, text, draft_id=draft_id, can_stop=can_stop)
 
+    async def thinking_only(self, chat_id: int, status: str = "Thinking…", draft_id: int | str | None = None) -> bool:
+        """Show only the tg-thinking animation block with a short public status."""
+        if not settings.enable_ai_thinking_indicator and not settings.rich_live_previews:
+            return False
+        return await self.draft(chat_id, thinking_only_blocks(status), draft_id=draft_id, can_stop=True)
+
+    async def clear_draft(self, chat_id: int, draft_id: int | str) -> bool:
+        """Dismiss the live preview draft so only the final message remains in chat."""
+        normalized_id = self.normalize_draft_id(draft_id)
+        try:
+            await self.call("sendRichMessageDraft", {
+                "chat_id": chat_id,
+                "draft_id": normalized_id,
+                "rich_message": rich_message([]),
+                "can_stop": False,
+                "keep_on_stop": False,
+            })
+            return True
+        except Exception:
+            pass
+        try:
+            await self.call("sendMessageDraft", {
+                "chat_id": chat_id,
+                "draft_id": normalized_id,
+                "text": "",
+                "can_stop": False,
+                "keep_on_stop": False,
+            })
+            return True
+        except Exception:
+            return False
+
     async def thinking_preview(self, chat_id: int, status: str, summary: str = "Working on your request.", draft_id: int | str | None = None) -> bool:
         """Show a professional AI-thinking indicator without exposing private reasoning."""
+        if settings.compact_responses:
+            return await self.thinking_only(chat_id, status or summary, draft_id=draft_id)
         if not settings.enable_ai_thinking_indicator:
             return await self.status_draft(chat_id, summary, status, draft_id=draft_id)
         return await self.draft(chat_id, thinking_blocks(summary, status), draft_id=draft_id, can_stop=True)

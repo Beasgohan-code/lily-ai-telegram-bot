@@ -84,11 +84,17 @@ class LilyCoreTests(unittest.TestCase):
         self.assertNotIn("api_key", json.dumps(report).lower().replace("api_key_configured", ""))
 
     def test_live_activity_blocks_contain_only_public_status(self):
-        blocks = live_activity_blocks("Encode permitted file", ["Validate file", "Deliver result"], "Validating the selected file.")
+        blocks = live_activity_blocks("Encode permitted file", ["Validate file", "Deliver result"], "Validating the selected file.", show_thinking=True)
         serialized = json.dumps(blocks)
-        self.assertIn("Lily", serialized)
+        self.assertEqual(blocks[0]["type"], "thinking")
         self.assertIn("Validating the selected file.", serialized)
         self.assertNotIn("chain-of-thought", serialized.lower())
+
+    def test_thinking_only_blocks_are_minimal(self):
+        from lily.rich import thinking_only_blocks
+        blocks = thinking_only_blocks("Planning…")
+        self.assertEqual(len(blocks), 2)
+        self.assertEqual(blocks[0]["type"], "thinking")
 
     def test_configured_web_search_returns_bounded_deduplicated_results(self):
         class Response:
@@ -1245,9 +1251,9 @@ class LilyCoreTests(unittest.TestCase):
         self.assertEqual(briefing.action, "admin_briefing")
 
     def test_message_draft_fallback_and_thinking_blocks(self):
-        from lily.rich import RichClient, thinking_blocks
-        blocks = thinking_blocks("Planning moderation", "Reviewing request")
-        self.assertEqual(blocks[1]["type"], "thinking")
+        from lily.rich import RichClient, thinking_blocks, thinking_only_blocks
+        blocks = thinking_only_blocks("Planning moderation")
+        self.assertEqual(blocks[0]["type"], "thinking")
         client = RichClient()
         async def run():
             calls = []

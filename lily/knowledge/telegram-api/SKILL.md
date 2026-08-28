@@ -13,7 +13,7 @@ Lily uses Bot API 10.3 draft methods for professional, low-noise updates:
 
 Live drafts show **public** status only: validating, thinking, awaiting confirmation, delivering. They never expose chain-of-thought, prompts, credentials, or private moderation data. Users can stop generation when the Bot API supports `can_stop`; Lily records the stop and does not continue the action.
 
-Set `LILY_COMPACT_RESPONSES=true` (default) to avoid duplicate progress messages in chat. Set `LILY_ENABLE_AI_THINKING=true` to show the official Rich Message thinking indicator while Lily plans or answers.
+Set `LILY_COMPACT_RESPONSES=true` (default) to avoid duplicate progress messages in chat. Lily shows a single **tg-thinking** draft that updates in place, stays visible for at least `LILY_THINKING_MIN_DISPLAY_SECONDS` (default 3), then clears automatically before the one final reply. Set `LILY_ENABLE_AI_THINKING=true` to show the official Rich Message thinking indicator while Lily plans or answers.
 
 ## Long messages and documents
 

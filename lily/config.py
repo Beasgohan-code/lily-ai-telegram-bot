@@ -76,6 +76,7 @@ class Settings:
     enable_ai_thinking_indicator: bool = field(default_factory=lambda: _bool("LILY_ENABLE_AI_THINKING", True))
     compact_responses: bool = field(default_factory=lambda: _bool("LILY_COMPACT_RESPONSES", True))
     ai_thinking_budget: int = field(default_factory=lambda: max(256, min(_int("LILY_AI_THINKING_BUDGET", 1024), 8192)))
+    thinking_min_display_seconds: float = field(default_factory=lambda: max(0.0, min(float(os.getenv("LILY_THINKING_MIN_DISPLAY_SECONDS", "3")), 10.0)))
     enable_miniapp_bridge: bool = field(default_factory=lambda: _bool("LILY_ENABLE_MINIAPP_BRIDGE", False))
     miniapp_allowed_origins: tuple[str, ...] = field(default_factory=lambda: tuple(value.strip().rstrip("/") for value in os.getenv("LILY_MINIAPP_ALLOWED_ORIGINS", "").split(",") if value.strip().startswith("https://")))
     miniapp_init_data_ttl_seconds: int = field(default_factory=lambda: max(60, min(_int("LILY_MINIAPP_INIT_DATA_TTL", 3600), 86_400)))

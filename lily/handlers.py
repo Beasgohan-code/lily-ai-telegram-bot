@@ -42,6 +42,7 @@ from .briefing_digest import build_briefing
 from .structured_intake import create_intake
 from .qa_loop import review_project, should_escalate, MAX_QA_RETRIES
 from .draft_manager import is_stopped, mark_stopped
+from .live_session import LiveThinkingSession, active_session, bind_session, work_draft_id
 
 
 tools = LilyTools(db)
@@ -160,28 +161,35 @@ def addressed_to_lily(update: Update, bot_username: str | None) -> bool:
     return text.lower().lstrip().startswith(("lily ", "lily,", "lily:", "lily!"))
 
 
-async def progress_message(update: Update, text_value: str, *, draft_only: bool = True) -> None:
-    """Update the live draft without posting extra chat messages."""
+async def send_result(update: Update, text: str, *, reply_markup: dict[str, Any] | None = None, context: ContextTypes.DEFAULT_TYPE | None = None) -> None:
+    """Clear the thinking draft, then send one clean final message — no Done/Completed spam."""
     chat = update.effective_chat
     if not chat:
         return
-    public_status = str(text_value)[:400]
+    session = active_session(context) if context else None
+    if session:
+        await session.finish()
+    elif settings.rich_live_previews:
+        await rich.clear_draft(chat.id, work_draft_id(update))
+    reply_to = update.effective_message.message_id if update.effective_message else None
+    if settings.compact_responses:
+        await rich.send(chat.id, [paragraph(str(text)[:3900])], reply_markup=reply_markup, reply_to=reply_to)
+    else:
+        await rich.send(chat.id, [heading("Lily", 2), paragraph(str(text)[:3900])], reply_markup=reply_markup, reply_to=reply_to)
+
+
+async def progress_message(update: Update, text_value: str, *, context: ContextTypes.DEFAULT_TYPE | None = None) -> None:
+    """Update the live tg-thinking draft in place — never post Lily is working messages."""
+    chat = update.effective_chat
+    if not chat:
+        return
+    public_status = str(text_value)[:120]
+    session = active_session(context) if context else None
+    if session:
+        await session.update(public_status)
+        return
     if settings.rich_live_previews:
-        await rich.status_draft(
-            chat.id,
-            "Processing your request.",
-            public_status,
-            stages=[public_status],
-            draft_id=f"progress:{update.update_id}",
-            show_thinking=settings.enable_ai_thinking_indicator,
-        )
-        if draft_only or settings.compact_responses:
-            return
-    if settings.rich_visible_progress:
-        blocks = [heading("Lily", 3), activity_status(public_status)]
-        if settings.custom_emoji_id:
-            blocks.insert(1, paragraph([custom_emoji(settings.custom_emoji_id, "✦"), " Working"]))
-        await rich.send(chat.id, blocks, reply_to=update.effective_message.message_id if update.effective_message else None)
+        await rich.thinking_only(chat.id, public_status, draft_id=work_draft_id(update))
 
 
 def normal_chat_permissions() -> ChatPermissions:
@@ -290,7 +298,7 @@ async def handle_post_state(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await rich.send(update.effective_chat.id, [heading("Channel selected", 2), paragraph(f"I can post to {label}. What should the post be about? For example: `Dragon Ball Super episode 12 announcement`."), paragraph("You can also say `custom post` if you want to provide the exact text yourself.")])
         return True
     if state.get("stage") == "await_title":
-        await progress_message(update, "Looking up the title and filling the announcement fields…")
+        await progress_message(update, "Looking up the title and filling the announcement fields…", context=context)
         try:
             if state.get("post_type") == "anime_announcement":
                 anime = await post_service.lookup_anime(value)
@@ -753,7 +761,7 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
             job_id = str(plan.args.get("_queue_job_id") or "")
             if job_id:
                 await db.update_encoding_job(job_id, progress=value)
-            await progress_message(update, value)
+            await progress_message(update, value, context=context)
         ctx = ToolContext(update=update, context=context, db=db, progress=chapter_progress)
         try:
             path = await tools.download_chapter_file(ctx, str(plan.args.get("url") or ""), series["title"], chapter, bool(plan.args.get("rights_confirmed")))
@@ -803,23 +811,23 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         await rich.send(chat_id, [heading("Web search", 2), paragraph(f"Results for: {plan.args.get('query', plan.summary)}"), table(rows), details("Snippets", [paragraph(f"{item['title']}: {item['snippet']}") for item in results])])
         return f"Displayed {len(results)} web result(s)."
     if action == "generate_image":
-        await progress_message(update, "Sending your image brief to the configured generation provider…")
+        await progress_message(update, "Sending your image brief to the configured generation provider…", context=context)
         url = await media_generation.image(str(plan.args.get("prompt") or plan.summary), str(plan.args.get("aspect_ratio") or "1:1"))
         await rich.send(chat_id, [heading("Image ready", 2), paragraph("Lily generated an image from your brief."), blockquote(url, "Output link")])
         return f"Generated image: {url}"
     if action == "generate_video":
-        await progress_message(update, "Sending your video brief to the configured generation provider…")
+        await progress_message(update, "Sending your video brief to the configured generation provider…", context=context)
         url = await media_generation.video(str(plan.args.get("prompt") or plan.summary), str(plan.args.get("aspect_ratio") or "16:9"), int(plan.args.get("duration_seconds") or 8))
         await rich.send(chat_id, [heading("Video ready", 2), paragraph("Lily generated a video from your brief."), blockquote(url, "Output link")])
         return f"Generated video: {url}"
     if action == "generate_speech":
-        await progress_message(update, "Creating your spoken audio with the configured text-to-speech provider…")
+        await progress_message(update, "Creating your spoken audio with the configured text-to-speech provider…", context=context)
         url = await media_generation.speech(str(plan.args.get("text") or ""), str(plan.args.get("voice") or settings.speech_voice), str(plan.args.get("language_code") or "en-US"))
         await rich.send(chat_id, [heading("Spoken audio ready", 2), paragraph("Lily generated a spoken audio file from your approved text."), blockquote(url, "Output link")])
         return f"Generated spoken audio: {url}"
     if action == "media_info":
         async def info_progress(value: str) -> None:
-            await progress_message(update, value)
+            await progress_message(update, value, context=context)
         ctx = ToolContext(update=update, context=context, db=db, progress=info_progress, source_file=plan.args.get("source_file"))
         metadata = await tools.media_info(ctx)
         fmt = metadata.get("format", {}) if isinstance(metadata, dict) else {}
@@ -830,7 +838,7 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         return "Displayed media metadata."
     if action == "stream_link":
         async def stream_progress(value: str) -> None:
-            await progress_message(update, value)
+            await progress_message(update, value, context=context)
         ctx = ToolContext(update=update, context=context, db=db, progress=stream_progress, source_file=plan.args.get("source_file"))
         source = ctx.source_file or _reply_context(update).get("reply", {})
         filename = safe_filename(str(source.get("file_name") or "media.bin"))
@@ -978,7 +986,7 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         query = str(plan.args.get("query") or "").strip()
         if not query:
             return "Provide a research question."
-        await progress_message(update, "Launching parallel research scouts…")
+        await progress_message(update, "Launching parallel research scouts…", context=context)
         result = await ResearchOrchestrator().run(query, scouts=settings.deep_research_scouts)
         rows = [["#", "Title", "Wave"]]
         for index, source in enumerate(result["sources"][:8], start=1):
@@ -1050,7 +1058,7 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
             return f"Code-project job `{job_id[:12]}` was cancelled before it started."
         async def workspace_progress(value: str) -> None:
             await db.update_code_project_job(job_id, value)
-            await progress_message(update, value)
+            await progress_message(update, value, context=context)
         ctx = ToolContext(update=update, context=context, db=db, progress=workspace_progress)
         try:
             await workspace_progress("Creating an isolated code workspace with the requested starter files…")
@@ -1105,7 +1113,7 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
             job_id = plan.args.get("_queue_job_id") or context.user_data.get("_encoding_job_id")
             if job_id:
                 await db.update_encoding_job(job_id, progress=value)
-            await progress_message(update, value)
+            await progress_message(update, value, context=context)
         ctx = ToolContext(update=update, context=context, db=db, progress=progress, source_file=plan.args.get("source_file"))
         if action == "rename_file":
             path = await tools.rename_file(ctx, str(plan.args.get("new_name", "renamed_file")))
@@ -1179,18 +1187,21 @@ async def handle_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: 
         user_id = update.effective_user.id
         if is_stopped(context, chat_id, user_id):
             return
-        if settings.rich_live_previews:
-            await rich.thinking_preview(chat_id, "Composing a response…", plan.summary or "Answering your message.", draft_id=f"answer:{update.update_id}")
+        session = active_session(context) or bind_session(context, update)
+        await session.update("Composing a response…")
         answer = await ai.answer(plan.args.get("prompt", plan.summary), _reply_context(update), memories, chat_settings)
         if is_stopped(context, chat_id, user_id):
+            await session.finish()
             return
-        await send_long_rich(chat_id, answer, title="Lily", reply_to=update.effective_message.message_id)
+        await session.finish()
+        await send_long_rich(chat_id, answer, reply_to=update.effective_message.message_id, compact=True)
         return
     if plan.requires_confirmation or plan.risk in {"risky", "dangerous"}:
+        session = active_session(context)
+        if session:
+            await session.finish()
         action_id = await db.create_pending(update.effective_chat.id, update.effective_user.id, plan.action, _plan_dict(plan), settings.confirmation_ttl_seconds)
         extra = "For audio downloads, Yes confirms you have permission to download the material." if plan.action == "download_song" else "For chapter files, Yes confirms you have already declared distribution rights for the approved direct source." if plan.action == "download_chapter" else "Lily will execute this only after you approve it."
-        if settings.rich_live_previews:
-            await rich.preview(update.effective_chat.id, plan.summary, public_stages, draft_id=action_id, status="Awaiting your confirmation.")
         await rich.send(
             update.effective_chat.id,
             [
@@ -1203,21 +1214,16 @@ async def handle_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: 
             reply_to=update.effective_message.message_id,
         )
         return
-    if settings.rich_live_previews:
-        await rich.preview(update.effective_chat.id, plan.summary, public_stages, draft_id=f"progress:{update.update_id}", status="Executing the approved action.")
-    if not settings.compact_responses:
-        blocks = [heading("Lily", 3), list_block(public_stages[:6])]
-        if settings.rich_visible_progress:
-            blocks.append(activity_status("Validating the approved request."))
-        await rich.send(update.effective_chat.id, blocks, reply_to=update.effective_message.message_id)
-    await progress_message(update, "Preparing the result…")
+    session = active_session(context) or bind_session(context, update)
+    await session.update("Working…")
     try:
         result = await execute_plan(update, context, plan)
     except Exception:
+        await session.finish()
         await _finish_skill_plan(plan, "failed", "Lily could not complete the approved skill action")
         raise
     await _finish_skill_plan(plan, "completed", "Completed")
-    await rich.send(update.effective_chat.id, [heading("Done", 2), paragraph(result)], reply_to=update.effective_message.message_id)
+    await send_result(update, result, context=context)
 
 
 async def auto_rename_upload(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_settings: dict[str, Any]) -> bool:
@@ -1281,14 +1287,10 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await handle_plan(update, context, skill_plan, settings_for_chat)
         return
     memories = await db.recent_memories(f"chat:{update.effective_chat.id}:user:{update.effective_user.id}")
-    if settings.rich_live_previews and settings.enable_ai_thinking_indicator:
-        await rich.thinking_preview(
-            update.effective_chat.id,
-            "Understanding your request…",
-            text_value[:240] or "Planning the safest response.",
-            draft_id=f"plan:{update.update_id}",
-        )
+    session = bind_session(context, update)
+    await session.start("Thinking…")
     plan = await ai.team_plan(text_value, _reply_context(update), memories, settings_for_chat)
+    await session.update("Planning…")
     await handle_plan(update, context, plan, settings_for_chat)
 
 
@@ -1405,9 +1407,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             job_id = await encoding_queue.enqueue(update, context, plan, execute_plan)
             await rich.send(update.effective_chat.id, [heading("Encoding job queued", 2), paragraph(f"Job ID: `{job_id}`"), paragraph("Lily will process it in the background. You can refresh its status or cancel it with the buttons below.")], reply_markup=inline_keyboard([[('Refresh', f'queue:{job_id}:status'), ('Cancel', f'queue:{job_id}:cancel')]]))
             return
-        await progress_message(update, "Approval received. Lily is executing the action…")
+        await progress_message(update, "Approval received. Executing…", context=context)
         result = await execute_plan(update, context, plan)
-        await rich.send(update.effective_chat.id, [heading("Approved and completed", 2), paragraph(result)])
+        await send_result(update, result, context=context)
     except Exception as exc:
         await send_error(update, str(exc)[:1000])
 

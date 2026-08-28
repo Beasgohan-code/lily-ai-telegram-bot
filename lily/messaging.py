@@ -25,11 +25,17 @@ def split_for_telegram(content: str, page_size: int = 3500) -> list[str]:
     return chunks
 
 
-async def send_long_rich(chat_id: int, content: str, title: str = "Lily", reply_to: int | None = None, page_size: int = 3500) -> list[dict[str, Any]]:
+async def send_long_rich(chat_id: int, content: str, title: str = "Lily", reply_to: int | None = None, page_size: int = 3500, *, compact: bool | None = None) -> list[dict[str, Any]]:
+    from .config import settings
+    compact = settings.compact_responses if compact is None else compact
     content = content or ""
     chunks = split_for_telegram(content, page_size)
     sent = []
     for index, chunk in enumerate(chunks, start=1):
-        page_title = title if len(chunks) == 1 else f"{title} · {index}/{len(chunks)}"
-        sent.append(await rich.send(chat_id, [heading(page_title, 2), paragraph(chunk)], reply_to=reply_to if index == 1 else None))
+        if compact:
+            blocks = [paragraph(chunk)]
+        else:
+            page_title = title if len(chunks) == 1 else f"{title} · {index}/{len(chunks)}"
+            blocks = [heading(page_title, 2), paragraph(chunk)]
+        sent.append(await rich.send(chat_id, blocks, reply_to=reply_to if index == 1 else None))
     return sent

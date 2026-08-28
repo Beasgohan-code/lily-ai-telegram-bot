@@ -290,7 +290,22 @@ Use `Lily, MangaDex search for Frieren` to search title metadata, or `Lily, show
 
 ## Telegram Bot API 10.3 delivery and local CLI
 
-Lily uses native Rich Messages whenever the deployed Bot API supports them and falls back gracefully for older deployments. It supports compact tables, expandable quotations, styled confirmation buttons, and optional live rich-message draft previews. The preview contains only public stages such as **validating**, **waiting for confirmation**, or **delivering**; it never exposes hidden model reasoning, system prompts, credentials, or unverified decisions. Telegram’s standard `sendMessage` text is limited to 4,096 characters after entities parsing, so Lily safely splits long answers into numbered pages below that limit rather than assuming an 8,000-character single-message allowance.[1]
+Lily uses native Rich Messages whenever the deployed Bot API supports them and falls back gracefully for older deployments. Bot API 10.3 draft streaming is supported through:
+
+- **`sendRichMessageDraft`** — structured status cards with optional thinking blocks and execution stages
+- **`sendMessageDraft`** — lightweight text draft fallback when rich drafts are unavailable
+
+Live drafts show only public status (validating, thinking, awaiting confirmation, delivering). They never expose hidden model reasoning, prompts, or credentials. With `LILY_COMPACT_RESPONSES=true` (default), Lily avoids spamming the chat with duplicate progress messages — drafts update in place and only the final answer or result is posted. Users can stop generation when the Bot API supports `can_stop`.
+
+```env
+LILY_RICH_LIVE_PREVIEWS=true
+LILY_ENABLE_MESSAGE_DRAFTS=true
+LILY_ENABLE_AI_THINKING=true
+LILY_COMPACT_RESPONSES=true
+LILY_AI_THINKING_BUDGET=1024
+```
+
+Telegram’s standard `sendMessage` text is limited to 4,096 characters after entities parsing, so Lily safely splits long answers into numbered pages below that limit.
 
 The `commands/` directory contains safe host-operator scripts:
 
