@@ -33,6 +33,14 @@ from .code_workspace import code_workspace
 from .skill_engine import select_skill
 from .agent_roles import assign_roles, catalog as agent_role_catalog, catalog_summary
 from .agent_team import public_team_stages
+from .scenario_runbooks import catalog as scenario_catalog, get as get_scenario, phase_stages
+from .handoff_templates import build_handoff, handoff_blocks
+from .rag_router import route as rag_route
+from .rag_diagnostics import diagnose as rag_diagnose, public_report as rag_public_report
+from .research_orchestrator import ResearchOrchestrator
+from .briefing_digest import build_briefing
+from .structured_intake import create_intake
+from .qa_loop import review_project, should_escalate, MAX_QA_RETRIES
 
 
 tools = LilyTools(db)
@@ -932,6 +940,64 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         rows.extend([[str(item["division"]), str(item["roles"])] for item in catalog_summary()])
         await rich.send(chat_id, [heading("Lily specialist roles", 2), paragraph(f"Lily has {len(roles)} curated specialist roles."), table(rows, compact=True), paragraph("When bounded team review is enabled, Lily selects only the relevant primary specialist and a small reviewer set. Every role works through the same approval and capability checks; no role receives unrestricted tools or privileged processes.")])
         return f"Lily has {len(roles)} curated specialist roles."
+    if action == "list_scenarios":
+        books = scenario_catalog()
+        rows = [["Scenario", "Mode", "Summary"]]
+        rows.extend([[item["title"], item["mode"], item["summary"][:80]] for item in books])
+        await rich.send(chat_id, [heading("NEXUS scenario runbooks", 2), paragraph("Phased agency workflows inspired by multi-agent orchestration patterns. Say `Lily, start scenario startup-mvp` to activate one."), table(rows, compact=True)])
+        return f"Listed {len(books)} scenario runbooks."
+    if action == "run_scenario":
+        slug = str(plan.args.get("scenario") or "").strip().lower()
+        book = get_scenario(slug)
+        if not book:
+            return f"Unknown scenario `{slug}`. Ask Lily to list scenarios for available runbooks."
+        phase_index = int(plan.args.get("phase") or 0)
+        stages = phase_stages(book, phase_index)
+        phase = book.phases[phase_index]
+        await rich.send(chat_id, [heading(book.title, 2), paragraph(book.summary), list_block(stages), paragraph(f"**Duration:** {book.duration} · **Mode:** {book.mode}")])
+        context.user_data["active_scenario"] = {"slug": book.slug, "phase": phase_index}
+        return f"Activated {book.title} — phase {phase_index + 1}: {phase.name}."
+    if action == "show_handoff":
+        packet = build_handoff(plan)
+        await rich.send(chat_id, [heading("Handoff card", 2), paragraph("\n".join(handoff_blocks(packet)))])
+        return "Displayed the current plan handoff card."
+    if action == "deep_research":
+        if not settings.enable_deep_research:
+            return "Deep research is disabled. Set LILY_ENABLE_DEEP_RESEARCH=true to enable it."
+        query = str(plan.args.get("query") or "").strip()
+        if not query:
+            return "Provide a research question."
+        await progress_message(update, "Launching parallel research scouts…")
+        result = await ResearchOrchestrator().run(query, scouts=settings.deep_research_scouts)
+        rows = [["#", "Title", "Wave"]]
+        for index, source in enumerate(result["sources"][:8], start=1):
+            rows.append([str(index), source["title"][:60], str(source.get("wave", ""))])
+        await rich.send(chat_id, [heading("Deep research", 2), paragraph(result["summary"]), table(rows, compact=True) if len(rows) > 1 else paragraph("No sources returned.")])
+        return f"Deep research complete with {len(result['sources'])} source(s) across {result['scout_count']} scout wave(s)."
+    if action == "rag_debug":
+        collections = [item["collection"] for item in rag_route(str(plan.args.get("query") or plan.summary), limit=3)]
+        findings = rag_diagnose(str(plan.args.get("query") or plan.summary), used_collections=collections)
+        await rich.send(chat_id, [heading("Knowledge diagnostics", 2), paragraph(rag_public_report(findings)), paragraph(f"Routed collections: {', '.join(collections) or 'none'}")])
+        return f"Ran {len(findings)} diagnostic pattern(s)."
+    if action == "admin_briefing":
+        if user_id not in settings.admin_user_ids and update.effective_chat.type != "private":
+            raise PermissionError("Only Lily administrators can request an operations briefing.")
+        briefing = await build_briefing(db, chat_id)
+        await rich.send(chat_id, [heading("Operations briefing", 2), paragraph(briefing["text"])])
+        return "Generated the operations briefing."
+    if action == "start_intake":
+        kind = str(plan.args.get("kind") or "research")
+        packet = create_intake(kind, str(plan.args.get("text") or plan.summary), user_id, chat_id, _reply_context(update))
+        context.user_data["latest_intake"] = packet.public_dict()
+        status = "ready for next step" if not packet.blocking else "needs more details"
+        await rich.send(chat_id, [heading(f"{kind.title()} intake", 2), paragraph(packet.summary), list_block([f"• {item}" for item in packet.blocking] or ["All required fields captured."])])
+        return f"Intake `{packet.intake_id[:12]}` created — {status}."
+    if action == "show_intake":
+        packet = context.user_data.get("latest_intake")
+        if not packet:
+            return "No active intake packet in this chat session. Start one with `Lily, moderation intake: …`"
+        await rich.send(chat_id, [heading("Intake status", 2), paragraph(json.dumps(packet, indent=2, ensure_ascii=False)[:3500])])
+        return "Displayed the latest intake packet."
     if action == "skill_status":
         runs = await db.list_skill_runs(chat_id, user_id, limit=10)
         if not runs:
@@ -981,6 +1047,19 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
                 await db.finish_code_project_job(job_id, "cancelled", "Cancelled before project files were created")
                 return f"Code-project job `{job_id[:12]}` was cancelled."
             workspace = code_workspace.create_project(user_id, requested_project, requested_language, str(plan.args.get("brief") or plan.summary))
+            qa_notes = ""
+            if settings.enable_qa_loop:
+                review = review_project(workspace, requested_language)
+                attempt = 1
+                while not review.passed and attempt < MAX_QA_RETRIES:
+                    attempt += 1
+                    await workspace_progress(f"QA review attempt {attempt - 1}: addressing {len(review.findings)} finding(s)…")
+                    workspace = code_workspace.create_project(user_id, requested_project, requested_language, f"{plan.args.get('brief') or plan.summary}\nQA feedback: {'; '.join(review.findings)}")
+                    review = review_project(workspace, requested_language)
+                if should_escalate(attempt, review):
+                    qa_notes = f" QA completed with {len(review.findings)} remaining note(s) after {MAX_QA_RETRIES} attempts."
+                elif review.findings:
+                    qa_notes = f" QA passed with notes: {'; '.join(review.findings[:3])}."
             await workspace_progress("Packaging the generated source files into a ZIP archive…")
             if await db.code_project_cancelled(job_id):
                 await db.finish_code_project_job(job_id, "cancelled", "Cancelled before archive delivery", file_count=len(workspace["files"]))
@@ -990,7 +1069,7 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
             await tools.send_output(ctx, archive, f"Lily code project: {workspace['project']}")
             await db.finish_code_project_job(job_id, "completed", "Delivered project archive", artifact_name=f"{workspace['project']}.zip", file_count=len(workspace["files"]))
             await db.audit(chat_id, user_id, "create_code_project", {"job_id": job_id[:12], "project": workspace["project"], "language": workspace["language"], "file_count": len(workspace["files"])})
-            return f"Created and delivered `{workspace['project']}.zip` with {len(workspace['files'])} source file(s). Job: `{job_id[:12]}`."
+            return f"Created and delivered `{workspace['project']}.zip` with {len(workspace['files'])} source file(s). Job: `{job_id[:12]}`.{qa_notes}"
         except Exception as exc:
             await db.finish_code_project_job(job_id, "failed", "Project creation failed", error=type(exc).__name__)
             raise

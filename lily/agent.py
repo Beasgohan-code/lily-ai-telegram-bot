@@ -10,6 +10,7 @@ from .group_controls import GROUP_CONTROL_MAP
 from .model_router import ModelProfile, ModelRouter
 from .execution_workflow import visible_stages
 from .knowledge_library import planning_policy
+from .rag_router import planning_context as rag_planning_context
 
 
 ACTIONS = {
@@ -29,6 +30,7 @@ ACTIONS = {
     "show_operating_skills",
     "mangadex_search", "mangadex_feed",
     "member_profile", "set_chat_title", "set_chat_description", "set_group_default_permissions", "create_invite_link", "revoke_invite_link", "create_forum_topic", "close_forum_topic", "reopen_forum_topic", "delete_forum_topic", "list_administrators", "group_member_count", "send_group_announcement", "post_checklist", "unpin_all_messages", "set_chat_sticker_set", "delete_chat_sticker_set", "show_identifiers",
+    "list_scenarios", "run_scenario", "show_handoff", "deep_research", "rag_debug", "admin_briefing", "start_intake", "show_intake",
 }
 
 RISK = {"safe", "risky", "dangerous"}
@@ -175,15 +177,17 @@ class AIClient:
             },
             "required": ["intent", "summary", "action", "risk", "requires_confirmation", "args", "missing", "confidence"],
         }
+        rag_context = rag_planning_context(text) if settings.enable_rag_routing else ""
         system = f"""You are Lily, an AI-first Telegram agent. Understand ordinary language and select one safe structured action.
 Never call tools yourself. Output only the JSON schema.
 Available actions: {', '.join(sorted(ACTIONS))}.
 Dangerous actions include banning, kicking, muting, deleting, pinning, changing rules/settings, publishing or deleting channel posts, external downloads, and expensive or large file processing.
 Set requires_confirmation=true for any risky or dangerous action. Require an explicit reply target or numeric user id for moderation. For download_song, require a direct permitted URL and include rights_confirmed=false until the user explicitly confirms they have permission.
-		For create_skill, put a structured trigger in args.trigger and a structured action in args.action; use args.execution_mode as auto or suggest, args.confirmation as never/risky/always, bounded args.cooldown_seconds (0–86400), and args.priority (0–1000). Only a fixed safe reply action may use automatic mode with confirmation never; all other skills must preserve confirmation. For create_poll, use args.question, args.options (2–10 strings), and optional args.anonymous. For add_filter, use args.trigger and optional args.response/delete_message/warn. For set_lock, use args.content_type and args.enabled. For configure_group_control, use args.control and args.enabled. For configure_warning_escalation, use a bounded args.threshold and args.seconds. For trusted_member, set args.user_id and args.trusted. For block_domain, set args.domain and args.blocked. For set_welcome/set_goodbye use args.enabled and args.text. For restrict_user use args.user_id, args.mode (read_only or text_only), and bounded args.seconds. For set_group_default_permissions, use args.mode as read_only or normal. For create_invite_link, accept optional args.name (max 32), args.member_limit (1–99999), and args.expire_hours (1–168); never set both member_limit and join-request mode. For revoke_invite_link, require args.invite_link. For create_forum_topic, require args.name (max 128). For close_forum_topic, reopen_forum_topic, and delete_forum_topic, require args.message_thread_id. For add_case_note use args.note and optional args.report_id/args.user_id. For save_note, use args.name and args.content. For search_posts, use args.channel_id and args.query. For plugin_reply, use args.text. For create_code_project, use a short args.project, args.language from python/javascript/typescript/html/css/json/yaml/bash/java/csharp/go/rust, and an args.brief. This only creates a Lily-owned source workspace and sends a ZIP; it never runs generated code or accepts shell commands. For code_project_status, optionally use args.job_id. For cancel_code_project, require an exact args.job_id and preserve requester-scoped cancellation.
+		For create_skill, put a structured trigger in args.trigger and a structured action in args.action; use args.execution_mode as auto or suggest, args.confirmation as never/risky/always, bounded args.cooldown_seconds (0–86400), and args.priority (0–1000). Only a fixed safe reply action may use automatic mode with confirmation never; all other skills must preserve confirmation. For create_poll, use args.question, args.options (2–10 strings), and optional args.anonymous. For add_filter, use args.trigger and optional args.response/delete_message/warn. For set_lock, use args.content_type and args.enabled. For configure_group_control, use args.control and args.enabled. For configure_warning_escalation, use a bounded args.threshold and args.seconds. For trusted_member, set args.user_id and args.trusted. For block_domain, set args.domain and args.blocked. For set_welcome/set_goodbye use args.enabled and args.text. For restrict_user use args.user_id, args.mode (read_only or text_only), and bounded args.seconds. For set_group_default_permissions, use args.mode as read_only or normal. For create_invite_link, accept optional args.name (max 32), args.member_limit (1–99999), and args.expire_hours (1–168); never set both member_limit and join-request mode. For revoke_invite_link, require args.invite_link. For create_forum_topic, require args.name (max 128). For close_forum_topic, reopen_forum_topic, and delete_forum_topic, require args.message_thread_id. For add_case_note use args.note and optional args.report_id/args.user_id. For save_note, use args.name and args.content. For search_posts, use args.channel_id and args.query. For plugin_reply, use args.text. For create_code_project, use a short args.project, args.language from python/javascript/typescript/html/css/json/yaml/bash/java/csharp/go/rust, and an args.brief. This only creates a Lily-owned source workspace and sends a ZIP; it never runs generated code or accepts shell commands. For code_project_status, optionally use args.job_id. For cancel_code_project, require an exact args.job_id and preserve requester-scoped cancellation. For run_scenario, use args.scenario slug such as startup-mvp or incident-response. For deep_research, use args.query. For start_intake, use args.kind as moderation, deployment, or research.
 	Group settings: {json.dumps(chat_settings, ensure_ascii=False)}
 	Recent memory: {json.dumps(memories, ensure_ascii=False)}
 	Curated operating policy: {planning_policy()}
+	Routed knowledge context: {rag_context or "none"}
 """
         payload = {
             "messages": [
@@ -296,6 +300,8 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             "/usage": ("usage", "Show Lily usage"), "/limits": ("usage", "Show Lily usage"),
             "/models": ("model_status", "Show AI model health"), "/ai": ("model_status", "Show AI model health"),
             "/skills": ("list_skills", "List enabled skills"), "/roles": ("show_agent_roles", "Show Lily’s specialist roles"),
+            "/scenarios": ("list_scenarios", "List NEXUS scenario runbooks"), "/runbook": ("list_scenarios", "List NEXUS scenario runbooks"),
+            "/briefing": ("admin_briefing", "Show Lily ops briefing"), "/ragdebug": ("rag_debug", "Diagnose knowledge routing"),
             "/queue": ("queue_list", "List encoding jobs"), "/projects": ("code_project_status", "Show recent code-project jobs"),
             "/controls": ("group_controls_status", "Show group control status"), "/diagnostics": ("group_diagnostics", "Show group moderation diagnostics"),
             "/rules": ("show_group_rules", "Show group rules"), "/locks": ("list_locks", "List group locks"),
@@ -330,6 +336,29 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
         if any(word in low for word in ("search the web", "web search", "look this up", "search online")):
             query = re.sub(r"^(.*?)(search the web|web search|look this up|search online)[: ]*", "", value, flags=re.I).strip() or value
             return Plan(intent="web_search", summary="Search the web", action="web_search", risk="safe", args={"query": query}, confidence=0.9)
+        if settings.enable_deep_research and any(phrase in low for phrase in ("deep research", "research mission", "investigate thoroughly")):
+            query = re.sub(r"^.*?(?:deep research|research mission|investigate thoroughly)\s*[:,-]?\s*", "", value, flags=re.I).strip() or value
+            return Plan(intent="deep_research", summary="Run a multi-scout research mission", action="deep_research", risk="safe", args={"query": query}, missing=[] if query else ["Provide a research question"], confidence=0.9)
+        if settings.enable_scenario_runbooks:
+            from .scenario_runbooks import match_request
+            if any(phrase in low for phrase in ("list scenarios", "list runbooks", "show scenarios", "show runbooks")):
+                return Plan(intent="list_scenarios", summary="List NEXUS scenario runbooks", action="list_scenarios", risk="safe", confidence=0.98)
+            if any(phrase in low for phrase in ("start scenario", "run scenario", "activate runbook", "start runbook")):
+                book = match_request(value)
+                slug = book.slug if book else re.sub(r"^.*?(?:start|run)\s+(?:scenario|runbook)\s*", "", low, flags=re.I).strip().split()[0] if low else ""
+                return Plan(intent="run_scenario", summary=f"Activate scenario {slug or 'runbook'}", action="run_scenario", risk="safe", args={"scenario": slug, "phase": 0}, missing=[] if slug else ["Name a scenario such as startup-mvp or incident-response"], confidence=0.9)
+            if any(phrase in low for phrase in ("show handoff", "handoff card", "handoff status")):
+                return Plan(intent="show_handoff", summary="Show the current plan handoff card", action="show_handoff", risk="safe", confidence=0.95)
+        if any(phrase in low for phrase in ("ops briefing", "admin briefing", "operations briefing", "daily briefing")):
+            return Plan(intent="admin_briefing", summary="Generate an operations briefing", action="admin_briefing", risk="safe", confidence=0.95)
+        if any(phrase in low for phrase in ("diagnose knowledge", "rag debug", "knowledge debug", "wrong answer")):
+            return Plan(intent="rag_debug", summary="Diagnose knowledge routing issues", action="rag_debug", risk="safe", args={"query": value}, confidence=0.9)
+        from .structured_intake import detect_kind
+        intake_kind = detect_kind(value)
+        if intake_kind:
+            return Plan(intent="start_intake", summary=f"Start a structured {intake_kind} intake", action="start_intake", risk="safe", args={"kind": intake_kind, "text": value}, confidence=0.88)
+        if any(phrase in low for phrase in ("intake status", "show intake")):
+            return Plan(intent="show_intake", summary="Show the latest structured intake packet", action="show_intake", risk="safe", confidence=0.9)
         if any(phrase in low for phrase in ("text to speech", "generate speech", "make speech", "read aloud", "say this aloud", "voice this text")):
             script = re.sub(r"^.*?(?:text to speech|generate speech|make speech|read aloud|say this aloud|voice this text)\s*[:,-]?\s*", "", value, flags=re.I).strip()
             voice_match = re.search(r"\bvoice\s+(Zephyr|Puck|Charon|Kore|Fenrir|Leda|Orus|Aoede|Callirrhoe|Autonoe|Enceladus|Iapetus|Umbriel|Algieba|Despina|Erinome|Algenib|Rasalgethi|Laomedeia|Achernar|Alnilam|Schedar|Gacrux|Pulcherrima|Achird|Zubenelgenubi|Vindemiatrix|Sadachbia|Sadaltager|Sulafat)\b", value, re.I)

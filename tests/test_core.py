@@ -1192,6 +1192,58 @@ class LilyCoreTests(unittest.TestCase):
         search = AIClient().heuristic_plan("Lily MangaDex search for Frieren", {"chat_type": "private", "reply": {}})
         self.assertEqual(search.action, "mangadex_search")
 
+    def test_scenario_runbooks_catalog_and_matching(self):
+        from lily.scenario_runbooks import catalog, get, match_request, phase_stages
+        books = catalog()
+        self.assertGreaterEqual(len(books), 4)
+        book = get("startup-mvp")
+        self.assertIsNotNone(book)
+        matched = match_request("Lily start scenario incident-response")
+        self.assertEqual(matched.slug if matched else "", "incident-response")
+        stages = phase_stages(book, 0)
+        self.assertTrue(any("Discover" in stage for stage in stages))
+
+    def test_handoff_template_contains_acceptance_criteria(self):
+        from lily.handoff_templates import build_handoff, handoff_blocks
+        plan = Plan(intent="create_code_project", summary="Build a bot", action="create_code_project", risk="safe", args={"project": "demo"})
+        packet = build_handoff(plan)
+        self.assertIn("acceptance_criteria", packet)
+        blocks = handoff_blocks(packet)
+        self.assertTrue(any("Handoff" in line for line in blocks))
+
+    def test_rag_router_scores_moderation_requests(self):
+        from lily.rag_router import route
+        matches = route("Lily ban spammer and check filters", limit=2)
+        collections = [item["collection"] for item in matches]
+        self.assertIn("moderation", collections)
+
+    def test_rag_diagnostics_returns_bounded_patterns(self):
+        from lily.rag_diagnostics import diagnose, public_report
+        findings = diagnose("wrong answer about moderation", used_collections=[])
+        self.assertTrue(findings)
+        report = public_report(findings)
+        self.assertIn("P05", report)
+
+    def test_qa_loop_flags_missing_python_entry(self):
+        from lily.qa_loop import review_project
+        review = review_project({"files": {"README.md": "# hi"}}, "python")
+        self.assertFalse(review.passed)
+        self.assertTrue(any("missing" in item.lower() or ".py" in item for item in review.findings))
+
+    def test_structured_intake_detects_moderation_kind(self):
+        from lily.structured_intake import create_intake, detect_kind
+        self.assertEqual(detect_kind("Lily moderation intake for spam"), "moderation")
+        packet = create_intake("moderation", "report user for spam links", 1, 2, {"target_user_id": 99})
+        self.assertFalse(packet.blocking)
+
+    def test_new_heuristic_aliases_for_agency_features(self):
+        scenarios = AIClient().heuristic_plan("/scenarios", {"chat_type": "private", "reply": {}})
+        self.assertEqual(scenarios.action, "list_scenarios")
+        research = AIClient().heuristic_plan("Lily deep research: best ffmpeg presets", {"chat_type": "private", "reply": {}})
+        self.assertEqual(research.action, "deep_research")
+        briefing = AIClient().heuristic_plan("/briefing", {"chat_type": "private", "reply": {}})
+        self.assertEqual(briefing.action, "admin_briefing")
+
 
 if __name__ == "__main__":
     unittest.main()

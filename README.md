@@ -84,6 +84,9 @@ For fast common requests, Lily recognizes a compact custom-alias layer alongside
 |---|---|---|
 | `/help`, `/start` | Show Lily help | Read-only. |
 | `/usage`, `/limits`, `/models`, `/skills`, `/roles` | Show user, model, skill, or role status | Read-only; provider secrets and internal errors remain hidden. |
+| `/scenarios`, `/runbook` | List NEXUS scenario runbooks | Read-only workflow catalog. |
+| `/briefing` | Admin operations digest | Read-only; queue and report counts. |
+| `/ragdebug` | Diagnose knowledge routing issues | Read-only P01–P12 pattern report. |
 | `/queue`, `/projects`, `/controls`, `/diagnostics`, `/rules`, `/locks`, `/filters`, `/admins` | Show scoped work, group, or moderation status | Uses the existing chat and administrator boundary where applicable. |
 | `/id`, `/ids` | Show the current user/chat/topic identifiers | Read-only; identifiers grant no permission. |
 | `/announce <text>` | Prepare a group announcement | Confirmation and administrator gate required. |
@@ -144,6 +147,31 @@ LILY_AGENT_TEAM_TIMEOUT=20
 ```
 
 The team feature uses the existing configured structured-output model router, provider privacy filtering, health checks, cooldowns, and fallback order. If specialist calls are unavailable or fail, Lily safely retains the original central plan rather than retrying indefinitely or expanding the team. Telegram shows a compact public status such as “bounded specialist review complete”; it does not show individual memo text, chain-of-thought, raw prompts, credentials, model responses, or command details. Use `./commands/ubuntu-sandbox.sh team "<request>"` for a **non-executing** local team-preview report. Ask **“Lily, show agent roles”** for a safe Telegram division summary, run `./commands/ubuntu-sandbox.sh roles` for the full local catalog, or use `./commands/ubuntu-sandbox.sh roles --division engineering` for a focused view.
+
+## Agency orchestration upgrades (v2)
+
+Lily now includes NEXUS-inspired workflows drawn from modern multi-agent agency patterns:
+
+| Feature | How to use it |
+|---|---|
+| **Scenario runbooks** | `Lily, list scenarios` or `Lily, start scenario startup-mvp` |
+| **Handoff cards** | `Lily, show handoff` after any planned action |
+| **RAG knowledge routing** | Automatic — Lily routes requests to bundled operating skills |
+| **Deep research** | `Lily, deep research: <question>` — parallel scout waves with citations |
+| **RAG diagnostics** | `/ragdebug` or `Lily, diagnose knowledge` |
+| **Ops briefing** | `/briefing` (admin) — queue health and open reports |
+| **Structured intake** | `Lily, moderation intake: …` or `deployment intake: …` |
+| **Dev↔QA loop** | Automatic on code projects when `LILY_ENABLE_QA_LOOP=true` |
+
+Five built-in scenarios ship today: **Startup MVP**, **Incident Response**, **Content Launch**, **Community Growth**, and **Deep Research Mission**. Each shows phased goals, deliverables, and specialist role rosters without granting new tools.
+
+```env
+LILY_ENABLE_SCENARIO_RUNBOOKS=true
+LILY_ENABLE_RAG_ROUTING=true
+LILY_ENABLE_DEEP_RESEARCH=true
+LILY_DEEP_RESEARCH_SCOUTS=3
+LILY_ENABLE_QA_LOOP=true
+```
 
 ## Recommended next advanced features
 

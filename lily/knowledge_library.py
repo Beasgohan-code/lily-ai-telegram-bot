@@ -24,6 +24,8 @@ SKILLS = {
     "bot-operations": "Approved bot projects, environment templates, and dry-run provisioning.",
     "deployment": "Persistent-host configuration, recovery, health, and service operations.",
     "miniapp": "Telegram Mini App authentication and authorization boundaries.",
+    "agency-orchestration": "NEXUS scenario runbooks, phased teams, and handoff cards.",
+    "rag-routing": "Knowledge collection routing, deep research, and RAG diagnostics.",
 }
 
 

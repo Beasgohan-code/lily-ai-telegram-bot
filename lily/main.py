@@ -4,7 +4,7 @@ import asyncio
 import logging
 
 from telegram import Update
-from telegram.ext import Application, CommandHandler
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 from .config import settings
 from .db import db
