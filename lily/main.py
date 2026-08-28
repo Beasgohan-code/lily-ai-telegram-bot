@@ -20,9 +20,7 @@ logging.basicConfig(
 logger = logging.getLogger("lily")
 
 
-def public_error_message() -> str:
-    """Return a stable user-facing failure message without leaking exception data."""
-    return "Lily could not complete that request. Please retry, simplify the request, or ask an administrator to check Lily’s private service logs."
+from .errors import public_error_message
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:

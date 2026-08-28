@@ -198,6 +198,7 @@ Set requires_confirmation=true for any risky or dangerous action. Require an exp
             "max_completion_tokens": 1200,
             "_reasoning": True,
             "_reasoning_effort": settings.ai_reasoning_effort,
+            "_thinking_budget": settings.ai_thinking_budget,
         }
         try:
             data = await self._request(payload, requirement="structured")
@@ -280,6 +281,7 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             "max_completion_tokens": 1200,
             "_reasoning": True,
             "_reasoning_effort": settings.ai_reasoning_effort,
+            "_thinking_budget": settings.ai_thinking_budget,
         }
         try:
             data = await self._request(payload, requirement="chat")

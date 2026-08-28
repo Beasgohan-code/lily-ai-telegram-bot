@@ -98,14 +98,27 @@ def activity_status(stage: str) -> dict[str, Any]:
     return details("Lily activity", [paragraph(str(stage)[:400])], is_open=False)
 
 
-def live_activity_blocks(summary: str, stages: list[str], status: str) -> list[dict[str, Any]]:
-    """Build a safe draft payload that never contains model reasoning or raw commands."""
+def thinking_blocks(summary: str, status: str) -> list[dict[str, Any]]:
+    """Public AI activity card — never exposes private model reasoning."""
     return [
-        heading("Lily live activity", 3),
+        heading("Lily", 3),
+        thinking(),
+        paragraph(str(status)[:400]),
+        details("Request status", [paragraph(str(summary)[:700])], is_open=False),
+    ]
+
+
+def live_activity_blocks(summary: str, stages: list[str], status: str, *, show_thinking: bool = False) -> list[dict[str, Any]]:
+    """Build a safe draft payload that never contains model reasoning or raw commands."""
+    blocks: list[dict[str, Any]] = [heading("Lily", 3)]
+    if show_thinking:
+        blocks.append(thinking())
+    blocks.extend([
         paragraph(str(summary)[:800]),
         activity_status(str(status)[:400]),
-        details("Public execution stages", [list_block([str(stage)[:180] for stage in stages[:8]])]),
-    ]
+        details("Execution stages", [list_block([str(stage)[:180] for stage in stages[:6]])]),
+    ])
+    return blocks
 
 
 def rich_message(blocks: list[dict[str, Any]]) -> dict[str, Any]:
@@ -139,6 +152,15 @@ class RichClient:
         self.token = settings.bot_token
         self.timeout = httpx.Timeout(60.0, connect=10.0)
         self._draft_ids = itertools.count(1001)
+        self._rich_draft_supported: bool | None = None
+        self._message_draft_supported: bool | None = None
+
+    def normalize_draft_id(self, draft_id: int | str | None = None) -> int:
+        if draft_id is None:
+            return next(self._draft_ids)
+        if isinstance(draft_id, str):
+            return int(hashlib.blake2s(draft_id.encode("utf-8"), digest_size=4).hexdigest(), 16)
+        return int(draft_id)
 
     async def call(self, method: str, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.token:
@@ -170,26 +192,65 @@ class RichClient:
                 fallback["reply_parameters"] = {"message_id": reply_to}
             return await self.call("sendMessage", fallback)
 
-    async def draft(self, chat_id: int, blocks: list[dict[str, Any]], draft_id: int | None = None, can_stop: bool = True) -> bool:
-        draft_id = draft_id or next(self._draft_ids)
+    async def message_draft(self, chat_id: int, text: str, draft_id: int | str | None = None, can_stop: bool = True) -> bool:
+        """Bot API 10.3 sendMessageDraft — lightweight text draft fallback."""
+        if not settings.enable_message_drafts:
+            return False
+        normalized_id = self.normalize_draft_id(draft_id)
+        payload: dict[str, Any] = {
+            "chat_id": chat_id,
+            "draft_id": normalized_id,
+            "text": str(text)[:4090],
+            "can_stop": can_stop,
+            "keep_on_stop": False,
+        }
+        try:
+            await self.call("sendMessageDraft", payload)
+            self._message_draft_supported = True
+            return True
+        except Exception:
+            self._message_draft_supported = False
+            return False
+
+    async def rich_draft(self, chat_id: int, blocks: list[dict[str, Any]], draft_id: int | str | None = None, can_stop: bool = True) -> bool:
+        normalized_id = self.normalize_draft_id(draft_id)
         try:
             await self.call("sendRichMessageDraft", {
                 "chat_id": chat_id,
-                "draft_id": draft_id,
+                "draft_id": normalized_id,
                 "rich_message": rich_message(blocks),
                 "can_stop": can_stop,
                 "keep_on_stop": False,
             })
+            self._rich_draft_supported = True
             return True
         except Exception:
+            self._rich_draft_supported = False
             return False
 
-    async def preview(self, chat_id: int, summary: str, stages: list[str], draft_id: int | str | None = None, status: str = "Waiting for confirmation or starting the approved task.") -> bool:
-        """Send an optional live Rich Message draft with public task stages only."""
-        normalized_id = draft_id
-        if isinstance(draft_id, str):
-            normalized_id = int(hashlib.blake2s(draft_id.encode("utf-8"), digest_size=4).hexdigest(), 16)
-        return await self.draft(chat_id, live_activity_blocks(summary, stages, status), draft_id=normalized_id, can_stop=True)
+    async def draft(self, chat_id: int, blocks: list[dict[str, Any]], draft_id: int | str | None = None, can_stop: bool = True) -> bool:
+        """Try sendRichMessageDraft, then sendMessageDraft, without posting a final message."""
+        if await self.rich_draft(chat_id, blocks, draft_id=draft_id, can_stop=can_stop):
+            return True
+        text = self._fallback_html(blocks)
+        return await self.message_draft(chat_id, text, draft_id=draft_id, can_stop=can_stop)
+
+    async def thinking_preview(self, chat_id: int, status: str, summary: str = "Working on your request.", draft_id: int | str | None = None) -> bool:
+        """Show a professional AI-thinking indicator without exposing private reasoning."""
+        if not settings.enable_ai_thinking_indicator:
+            return await self.status_draft(chat_id, summary, status, draft_id=draft_id)
+        return await self.draft(chat_id, thinking_blocks(summary, status), draft_id=draft_id, can_stop=True)
+
+    async def status_draft(self, chat_id: int, summary: str, status: str, stages: list[str] | None = None, draft_id: int | str | None = None, show_thinking: bool = False) -> bool:
+        blocks = live_activity_blocks(summary, stages or [status], status, show_thinking=show_thinking)
+        return await self.draft(chat_id, blocks, draft_id=draft_id, can_stop=True)
+
+    async def preview(self, chat_id: int, summary: str, stages: list[str], draft_id: int | str | None = None, status: str = "Working on your request.") -> bool:
+        """Send an optional live draft with public task stages only — no chat spam."""
+        if not settings.rich_live_previews:
+            return False
+        show_thinking = settings.enable_ai_thinking_indicator
+        return await self.status_draft(chat_id, summary, status, stages=stages, draft_id=draft_id, show_thinking=show_thinking)
 
     def _fallback_html(self, blocks: list[dict[str, Any]]) -> str:
         parts: list[str] = []

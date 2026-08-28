@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from telegram import ChatPermissions, Update
-from telegram.ext import Application, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CallbackQueryHandler, ContextTypes, MessageHandler, TypeHandler, filters
 
 from .agent import Plan, ai
 from .config import settings
@@ -32,7 +32,7 @@ from .mangadex import MangaDexError, mangadex
 from .code_workspace import code_workspace
 from .skill_engine import select_skill
 from .agent_roles import assign_roles, catalog as agent_role_catalog, catalog_summary
-from .agent_team import public_team_stages
+from .errors import public_error_message
 from .scenario_runbooks import catalog as scenario_catalog, get as get_scenario, phase_stages
 from .handoff_templates import build_handoff, handoff_blocks
 from .rag_router import route as rag_route
@@ -41,6 +41,7 @@ from .research_orchestrator import ResearchOrchestrator
 from .briefing_digest import build_briefing
 from .structured_intake import create_intake
 from .qa_loop import review_project, should_escalate, MAX_QA_RETRIES
+from .draft_manager import is_stopped, mark_stopped
 
 
 tools = LilyTools(db)
@@ -159,18 +160,28 @@ def addressed_to_lily(update: Update, bot_username: str | None) -> bool:
     return text.lower().lstrip().startswith(("lily ", "lily,", "lily:", "lily!"))
 
 
-async def progress_message(update: Update, text_value: str) -> None:
+async def progress_message(update: Update, text_value: str, *, draft_only: bool = True) -> None:
+    """Update the live draft without posting extra chat messages."""
     chat = update.effective_chat
     if not chat:
         return
     public_status = str(text_value)[:400]
     if settings.rich_live_previews:
-        await rich.preview(chat.id, "Lily is completing the approved request.", [public_status], draft_id=f"progress:{update.update_id}", status=public_status)
-    blocks = [heading("Lily is working", 3)]
-    if settings.custom_emoji_id:
-        blocks.append(paragraph([custom_emoji(settings.custom_emoji_id, "✦"), " Agent activity"] ))
-    blocks.extend([activity_status("Public runtime status only — Lily does not show private model reasoning, raw commands, or secrets."), paragraph(public_status)])
-    await rich.send(chat.id, blocks, reply_to=update.effective_message.message_id if update.effective_message else None)
+        await rich.status_draft(
+            chat.id,
+            "Processing your request.",
+            public_status,
+            stages=[public_status],
+            draft_id=f"progress:{update.update_id}",
+            show_thinking=settings.enable_ai_thinking_indicator,
+        )
+        if draft_only or settings.compact_responses:
+            return
+    if settings.rich_visible_progress:
+        blocks = [heading("Lily", 3), activity_status(public_status)]
+        if settings.custom_emoji_id:
+            blocks.insert(1, paragraph([custom_emoji(settings.custom_emoji_id, "✦"), " Working"]))
+        await rich.send(chat.id, blocks, reply_to=update.effective_message.message_id if update.effective_message else None)
 
 
 def normal_chat_permissions() -> ChatPermissions:
@@ -1164,32 +1175,49 @@ async def handle_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan: 
             plan.args["source_file"] = reply
     if plan.action == "none":
         memories = await db.recent_memories(f"chat:{update.effective_chat.id}:user:{update.effective_user.id}")
+        chat_id = update.effective_chat.id
+        user_id = update.effective_user.id
+        if is_stopped(context, chat_id, user_id):
+            return
         if settings.rich_live_previews:
-            await rich.preview(update.effective_chat.id, plan.summary or "Preparing a response", public_stages, draft_id=f"progress:{update.update_id}", status="Preparing a safe response.")
+            await rich.thinking_preview(chat_id, "Composing a response…", plan.summary or "Answering your message.", draft_id=f"answer:{update.update_id}")
         answer = await ai.answer(plan.args.get("prompt", plan.summary), _reply_context(update), memories, chat_settings)
-        await send_long_rich(update.effective_chat.id, answer, title="Lily", reply_to=update.effective_message.message_id)
+        if is_stopped(context, chat_id, user_id):
+            return
+        await send_long_rich(chat_id, answer, title="Lily", reply_to=update.effective_message.message_id)
         return
     if plan.requires_confirmation or plan.risk in {"risky", "dangerous"}:
         action_id = await db.create_pending(update.effective_chat.id, update.effective_user.id, plan.action, _plan_dict(plan), settings.confirmation_ttl_seconds)
         extra = "For audio downloads, Yes confirms you have permission to download the material." if plan.action == "download_song" else "For chapter files, Yes confirms you have already declared distribution rights for the approved direct source." if plan.action == "download_chapter" else "Lily will execute this only after you approve it."
         if settings.rich_live_previews:
-            await rich.preview(update.effective_chat.id, plan.summary, public_stages, draft_id=action_id, status="Waiting for the requester’s confirmation.")
-        await rich.send(update.effective_chat.id, [heading("Confirmation required", 2), paragraph(plan.summary), table([["Action", plan.action], ["Risk", plan.risk], ["Requested by", update.effective_user.full_name]]), details("Planned stages", [list_block(public_stages)]), activity_status("Waiting for the requester’s decision."), paragraph(extra)], reply_markup=confirmation_keyboard(action_id), reply_to=update.effective_message.message_id)
+            await rich.preview(update.effective_chat.id, plan.summary, public_stages, draft_id=action_id, status="Awaiting your confirmation.")
+        await rich.send(
+            update.effective_chat.id,
+            [
+                heading("Confirmation required", 2),
+                paragraph(plan.summary),
+                table([["Action", plan.action], ["Risk", plan.risk]]),
+                details("What happens next", [list_block(public_stages[:5]), paragraph(extra)]),
+            ],
+            reply_markup=confirmation_keyboard(action_id),
+            reply_to=update.effective_message.message_id,
+        )
         return
     if settings.rich_live_previews:
-        await rich.preview(update.effective_chat.id, plan.summary, public_stages, draft_id=f"progress:{update.update_id}", status="Preparing the approved Lily action.")
-    blocks = [heading("Lily plan", 3), list_block(public_stages)]
-    if settings.rich_visible_progress:
-        blocks.append(activity_status("Validating the approved request."))
-    await rich.send(update.effective_chat.id, blocks, reply_to=update.effective_message.message_id)
-    await progress_message(update, "Checking the request and preparing the result…")
+        await rich.preview(update.effective_chat.id, plan.summary, public_stages, draft_id=f"progress:{update.update_id}", status="Executing the approved action.")
+    if not settings.compact_responses:
+        blocks = [heading("Lily", 3), list_block(public_stages[:6])]
+        if settings.rich_visible_progress:
+            blocks.append(activity_status("Validating the approved request."))
+        await rich.send(update.effective_chat.id, blocks, reply_to=update.effective_message.message_id)
+    await progress_message(update, "Preparing the result…")
     try:
         result = await execute_plan(update, context, plan)
     except Exception:
         await _finish_skill_plan(plan, "failed", "Lily could not complete the approved skill action")
         raise
     await _finish_skill_plan(plan, "completed", "Completed")
-    await rich.send(update.effective_chat.id, [heading("Completed", 2), paragraph(result)])
+    await rich.send(update.effective_chat.id, [heading("Done", 2), paragraph(result)], reply_to=update.effective_message.message_id)
 
 
 async def auto_rename_upload(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_settings: dict[str, Any]) -> bool:
@@ -1253,6 +1281,13 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await handle_plan(update, context, skill_plan, settings_for_chat)
         return
     memories = await db.recent_memories(f"chat:{update.effective_chat.id}:user:{update.effective_user.id}")
+    if settings.rich_live_previews and settings.enable_ai_thinking_indicator:
+        await rich.thinking_preview(
+            update.effective_chat.id,
+            "Understanding your request…",
+            text_value[:240] or "Planning the safest response.",
+            draft_id=f"plan:{update.update_id}",
+        )
     plan = await ai.team_plan(text_value, _reply_context(update), memories, settings_for_chat)
     await handle_plan(update, context, plan, settings_for_chat)
 
@@ -1385,15 +1420,29 @@ async def goodbye_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await moderation.goodbye(update)
 
 
+async def on_stopped_generation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle Bot API 10.3 draft stop events without leaking internal state."""
+    payload = update.to_dict()
+    stopped = payload.get("stopped_message_generation")
+    if not stopped:
+        return
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or not user:
+        return
+    mark_stopped(context, chat.id, user.id)
+    await rich.send(chat.id, [heading("Stopped", 3), paragraph("Generation stopped. No further action was taken.")], reply_to=update.effective_message.message_id if update.effective_message else None)
+
+
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     if isinstance(update, Update) and update.effective_chat:
-        await send_error(update, "An internal error occurred while processing that request. Check the server log for details.")
+        await send_error(update, public_error_message())
 
 
 def register_handlers(application: Application) -> None:
     plugin_manager.discover()
+    application.add_handler(TypeHandler(Update, on_stopped_generation), group=-2)
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_handler), group=-1)
     application.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, goodbye_handler), group=-1)
     application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, on_message), group=0)
     application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^(confirm:|postpublish$|postcancel$|search:|queue:|verify:)"), group=0)
-    application.add_error_handler(on_error)

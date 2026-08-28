@@ -20,7 +20,7 @@ from fastapi import FastAPI
 
 from lily.agent import ACTIONS, AIClient, AgentTeamMemo, Plan
 from lily.agent_team import merge_role_reviews, public_team_summary, redact_team_text, role_review_context, select_roles
-from lily.main import public_error_message
+from lily.errors import public_error_message
 from lily.cli import public_agent_report
 from lily.rich import live_activity_blocks
 from lily.sandbox import sandbox_status
@@ -86,7 +86,7 @@ class LilyCoreTests(unittest.TestCase):
     def test_live_activity_blocks_contain_only_public_status(self):
         blocks = live_activity_blocks("Encode permitted file", ["Validate file", "Deliver result"], "Validating the selected file.")
         serialized = json.dumps(blocks)
-        self.assertIn("Lily live activity", serialized)
+        self.assertIn("Lily", serialized)
         self.assertIn("Validating the selected file.", serialized)
         self.assertNotIn("chain-of-thought", serialized.lower())
 
@@ -1243,6 +1243,24 @@ class LilyCoreTests(unittest.TestCase):
         self.assertEqual(research.action, "deep_research")
         briefing = AIClient().heuristic_plan("/briefing", {"chat_type": "private", "reply": {}})
         self.assertEqual(briefing.action, "admin_briefing")
+
+    def test_message_draft_fallback_and_thinking_blocks(self):
+        from lily.rich import RichClient, thinking_blocks
+        blocks = thinking_blocks("Planning moderation", "Reviewing request")
+        self.assertEqual(blocks[1]["type"], "thinking")
+        client = RichClient()
+        async def run():
+            calls = []
+            async def fake_call(method, payload):
+                calls.append(method)
+                if method == "sendRichMessageDraft":
+                    raise RuntimeError("unsupported")
+                return {}
+            client.call = fake_call  # type: ignore[method-assign]
+            ok = await client.draft(1, blocks, draft_id=42)
+            self.assertTrue(ok)
+            self.assertIn("sendMessageDraft", calls)
+        asyncio.run(run())
 
 
 if __name__ == "__main__":

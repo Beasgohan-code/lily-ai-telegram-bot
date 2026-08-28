@@ -2,9 +2,18 @@
 
 Lily uses Rich Messages when the deployed Bot API supports them and gracefully falls back to HTML `sendMessage` formatting when it does not. Rich responses may use headings, compact tables, details, block quotations, expandable quotations, documents, media, and styled buttons. Bot API 10.3 adds rich buttons, rich button blocks, expandable quotations, document blocks, compact-table support, generation-stop controls for drafts, and disabled buttons.[1]
 
-## Live preview and “AI thinking” policy
+## Live preview, drafts, and AI thinking
 
-Lily’s live preview is an optional `sendRichMessageDraft` status card with a short summary and public procedural stages. It can say **validating permissions**, **waiting for confirmation**, **preparing output**, or **delivering a file**. It must never expose chain-of-thought, hidden prompts, provider reasoning, secret values, raw tool arguments, or private moderation data. The user can stop a draft when Bot API support is available; the normal confirmation card remains the compatibility fallback.[1]
+Lily uses Bot API 10.3 draft methods for professional, low-noise updates:
+
+| Method | Use |
+|---|---|
+| `sendRichMessageDraft` | Structured status cards with thinking blocks and stages |
+| `sendMessageDraft` | Lightweight text fallback when rich drafts are unavailable |
+
+Live drafts show **public** status only: validating, thinking, awaiting confirmation, delivering. They never expose chain-of-thought, prompts, credentials, or private moderation data. Users can stop generation when the Bot API supports `can_stop`; Lily records the stop and does not continue the action.
+
+Set `LILY_COMPACT_RESPONSES=true` (default) to avoid duplicate progress messages in chat. Set `LILY_ENABLE_AI_THINKING=true` to show the official Rich Message thinking indicator while Lily plans or answers.
 
 ## Long messages and documents
 
