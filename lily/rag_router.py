@@ -21,6 +21,7 @@ _COLLECTION_KEYWORDS: dict[str, tuple[str, ...]] = {
     "agent-workflow": ("plan", "confirm", "approval", "workflow", "scenario", "runbook", "handoff"),
     "agency-orchestration": ("nexus", "orchestrat", "specialist team", "agent team", "runbook"),
     "rag-routing": ("knowledge", "rag", "search skill", "operating skill"),
+    "free-tools": ("weather", "crypto", "wikipedia", "translate", "anime search", "hacker news", "free tools", "joke", "nasa", "country"),
     "sources/mangadex": ("mangadex",),
     "telegram-api": ("telegram api", "bot api", "richmessage", "local bot api"),
 }

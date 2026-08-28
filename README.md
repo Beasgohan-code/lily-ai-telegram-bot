@@ -87,6 +87,7 @@ For fast common requests, Lily recognizes a compact custom-alias layer alongside
 | `/scenarios`, `/runbook` | List NEXUS scenario runbooks | Read-only workflow catalog. |
 | `/briefing` | Admin operations digest | Read-only; queue and report counts. |
 | `/ragdebug` | Diagnose knowledge routing issues | Read-only P01–P12 pattern report. |
+| `/tools` | Show free no-key API lookup tools | Read-only catalog. |
 | `/queue`, `/projects`, `/controls`, `/diagnostics`, `/rules`, `/locks`, `/filters`, `/admins` | Show scoped work, group, or moderation status | Uses the existing chat and administrator boundary where applicable. |
 | `/id`, `/ids` | Show the current user/chat/topic identifiers | Read-only; identifiers grant no permission. |
 | `/announce <text>` | Prepare a group announcement | Confirmation and administrator gate required. |
@@ -173,6 +174,26 @@ LILY_DEEP_RESEARCH_SCOUTS=3
 LILY_ENABLE_QA_LOOP=true
 ```
 
+## Free API lookups (no keys required)
+
+Lily ships **20 built-in public API tools** that work without extra credentials. Ask in natural language or use `/tools` for the catalog.
+
+| Category | Examples |
+|---|---|
+| **Weather & time** | `Lily weather in Paris`, `Lily time in Tokyo` |
+| **Money & markets** | `Lily bitcoin price`, `Lily convert 100 USD to EUR` |
+| **Knowledge** | `Lily wiki Python`, `Lily define serendipity`, `Lily country info Japan` |
+| **Media & fun** | `Lily anime search Frieren`, `Lily tell me a joke`, `Lily cat fact`, `Lily nasa apod` |
+| **Developer** | `Lily github torvalds/linux`, `Lily hacker news top`, `Lily ip lookup 8.8.8.8` |
+| **Utility** | `Lily shorten https://…`, `Lily qr code for https://…`, `Lily translate hello to Spanish` |
+
+```env
+LILY_ENABLE_FREE_TOOLS=true
+LILY_FREE_API_TIMEOUT=20
+```
+
+Results are bounded, attributed to their provider, and returned as a single compact reply (with tg-thinking draft preview when enabled). Disable the feature entirely with `LILY_ENABLE_FREE_TOOLS=false`.
+
 ## Recommended next advanced features
 
 | Feature | Why it matters |
@@ -245,6 +266,13 @@ Lily, provision bot manga-bot.
 Lily, track manhwa Solo Leveling at chapter 210.
 Lily, list tracked series.
 Lily, update Solo Leveling to chapter 211.
+Lily, weather in Berlin.
+Lily, bitcoin price.
+Lily, wiki artificial intelligence.
+Lily, tell me a joke.
+Lily, nasa apod.
+Lily, country info Brazil.
+Lily, qr code for https://example.com/event.
 ```
 
 The user should reply directly to a target message or file when Lily needs an unambiguous target. This prevents the AI from guessing which member or file the user meant.

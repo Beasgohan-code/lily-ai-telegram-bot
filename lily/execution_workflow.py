@@ -31,6 +31,9 @@ def visible_stages(action: str, risk: str, missing: list[str], requires_confirma
         stages.append("Show public phase goals, deliverables, and specialist roles")
     elif action in {"rag_debug", "admin_briefing", "show_handoff", "start_intake", "show_intake", "list_scenarios"}:
         stages.append("Prepare a read-only operational or diagnostic report")
+    elif action in {"weather_lookup", "crypto_price", "exchange_rate", "wikipedia_search", "define_word", "anime_search", "github_repo", "world_time", "daily_quote", "hackernews_feed", "shorten_url", "random_fact", "translate_text", "free_tools_catalog", "dad_joke", "number_fact", "ip_lookup", "qr_code", "nasa_apod", "cat_fact", "country_info"}:
+        stages.append("Call the configured free public API provider")
+        stages.append("Format a bounded, attributed response")
     elif action in {"ban_user", "kick_user", "mute_user", "restrict_user", "delete_message", "purge_messages"}:
         stages.append("Check moderator authority and the exact chat target")
     elif action in {"set_group_default_permissions", "create_invite_link", "revoke_invite_link", "create_forum_topic", "close_forum_topic", "reopen_forum_topic", "delete_forum_topic", "list_administrators", "group_member_count", "send_group_announcement", "post_checklist", "unpin_all_messages", "set_chat_sticker_set", "delete_chat_sticker_set"}:

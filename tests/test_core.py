@@ -1268,6 +1268,29 @@ class LilyCoreTests(unittest.TestCase):
             self.assertIn("sendMessageDraft", calls)
         asyncio.run(run())
 
+    def test_free_tools_heuristics(self):
+        weather = AIClient().heuristic_plan("Lily weather in Paris", {"chat_type": "private", "reply": {}})
+        self.assertEqual(weather.action, "weather_lookup")
+        crypto = AIClient().heuristic_plan("Lily bitcoin price", {"chat_type": "private", "reply": {}})
+        self.assertEqual(crypto.action, "crypto_price")
+        wiki = AIClient().heuristic_plan("Lily wiki Python programming", {"chat_type": "private", "reply": {}})
+        self.assertEqual(wiki.action, "wikipedia_search")
+        tools = AIClient().heuristic_plan("/tools", {"chat_type": "private", "reply": {}})
+        self.assertEqual(tools.action, "free_tools_catalog")
+        joke = AIClient().heuristic_plan("Lily tell me a joke", {"chat_type": "private", "reply": {}})
+        self.assertEqual(joke.action, "dad_joke")
+        register = AIClient().heuristic_plan(
+            "Lily register bot manga-bot from https://github.com/example/manga-bot with python-main entrypoint bot.py",
+            {"chat_type": "private", "reply": {}},
+        )
+        self.assertEqual(register.action, "register_managed_project")
+
+    def test_free_tools_catalog_is_bounded(self):
+        from lily.free_tools import free_tools
+        catalog = free_tools.catalog()
+        self.assertGreaterEqual(len(catalog), 18)
+        self.assertIn("weather", {item["name"] for item in catalog})
+
 
 if __name__ == "__main__":
     unittest.main()

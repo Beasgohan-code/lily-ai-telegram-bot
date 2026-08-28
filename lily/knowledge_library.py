@@ -26,6 +26,7 @@ SKILLS = {
     "miniapp": "Telegram Mini App authentication and authorization boundaries.",
     "agency-orchestration": "NEXUS scenario runbooks, phased teams, and handoff cards.",
     "rag-routing": "Knowledge collection routing, deep research, and RAG diagnostics.",
+    "free-tools": "No-key public API lookups: weather, crypto, wiki, anime, and more.",
 }
 
 

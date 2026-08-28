@@ -40,7 +40,7 @@ from .rag_diagnostics import diagnose as rag_diagnose, public_report as rag_publ
 from .research_orchestrator import ResearchOrchestrator
 from .briefing_digest import build_briefing
 from .structured_intake import create_intake
-from .qa_loop import review_project, should_escalate, MAX_QA_RETRIES
+from .free_tools import FreeToolsError, free_tools
 from .draft_manager import is_stopped, mark_stopped
 from .live_session import LiveThinkingSession, active_session, bind_session, work_draft_id
 
@@ -810,6 +810,63 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
         rows = [["Title", "URL"]] + [[item["title"][:100], item["url"][:160]] for item in results]
         await rich.send(chat_id, [heading("Web search", 2), paragraph(f"Results for: {plan.args.get('query', plan.summary)}"), table(rows), details("Snippets", [paragraph(f"{item['title']}: {item['snippet']}") for item in results])])
         return f"Displayed {len(results)} web result(s)."
+    if action == "free_tools_catalog":
+        rows = [["Tool", "Example"]]
+        for item in free_tools.catalog():
+            rows.append([item["name"], item["example"][:80]])
+        await rich.send(chat_id, [heading("Free API tools", 2), paragraph("No API keys required — Lily calls these public services directly."), table(rows, compact=True)])
+        return f"Lily has {len(rows) - 1} free lookup tools available."
+    if settings.enable_free_tools:
+        try:
+            if action == "weather_lookup":
+                text = await free_tools.weather(str(plan.args.get("location") or ""))
+            elif action == "crypto_price":
+                text = await free_tools.crypto_price(str(plan.args.get("symbol") or "bitcoin"))
+            elif action == "exchange_rate":
+                text = await free_tools.exchange_rate(str(plan.args.get("base") or "USD"), str(plan.args.get("target") or "EUR"), float(plan.args.get("amount") or 1))
+            elif action == "wikipedia_search":
+                text = await free_tools.wikipedia(str(plan.args.get("query") or ""))
+            elif action == "define_word":
+                text = await free_tools.define_word(str(plan.args.get("word") or ""))
+            elif action == "anime_search":
+                text = await free_tools.anime_search(str(plan.args.get("query") or ""))
+            elif action == "github_repo":
+                text = await free_tools.github_repo(str(plan.args.get("repo") or ""))
+            elif action == "world_time":
+                text = await free_tools.world_time(str(plan.args.get("city") or ""))
+            elif action == "daily_quote":
+                text = await free_tools.daily_quote()
+            elif action == "hackernews_feed":
+                text = await free_tools.hackernews(str(plan.args.get("topic") or "top"))
+            elif action == "shorten_url":
+                text = await free_tools.shorten_url(str(plan.args.get("url") or ""))
+            elif action == "random_fact":
+                text = await free_tools.random_fact()
+            elif action == "translate_text":
+                text = await free_tools.translate(str(plan.args.get("text") or ""), str(plan.args.get("target") or "en"), str(plan.args.get("source") or "auto"))
+            elif action == "dad_joke":
+                text = await free_tools.dad_joke()
+            elif action == "number_fact":
+                text = await free_tools.number_fact(str(plan.args.get("number") or ""))
+            elif action == "ip_lookup":
+                text = await free_tools.ip_lookup(str(plan.args.get("ip") or ""))
+            elif action == "qr_code":
+                text = await free_tools.qr_code(str(plan.args.get("data") or ""))
+            elif action == "nasa_apod":
+                text = await free_tools.nasa_apod()
+            elif action == "cat_fact":
+                text = await free_tools.cat_fact()
+            elif action == "country_info":
+                text = await free_tools.country_info(str(plan.args.get("country") or ""))
+            else:
+                text = ""
+            if text:
+                await send_long_rich(chat_id, text, reply_to=update.effective_message.message_id, compact=True)
+                return "Lookup complete."
+        except FreeToolsError as exc:
+            return str(exc)
+        except Exception:
+            return "That free lookup service is temporarily unavailable. Please try again shortly."
     if action == "generate_image":
         await progress_message(update, "Sending your image brief to the configured generation provider…", context=context)
         url = await media_generation.image(str(plan.args.get("prompt") or plan.summary), str(plan.args.get("aspect_ratio") or "1:1"))

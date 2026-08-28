@@ -31,6 +31,9 @@ ACTIONS = {
     "mangadex_search", "mangadex_feed",
     "member_profile", "set_chat_title", "set_chat_description", "set_group_default_permissions", "create_invite_link", "revoke_invite_link", "create_forum_topic", "close_forum_topic", "reopen_forum_topic", "delete_forum_topic", "list_administrators", "group_member_count", "send_group_announcement", "post_checklist", "unpin_all_messages", "set_chat_sticker_set", "delete_chat_sticker_set", "show_identifiers",
     "list_scenarios", "run_scenario", "show_handoff", "deep_research", "rag_debug", "admin_briefing", "start_intake", "show_intake",
+    "weather_lookup", "crypto_price", "exchange_rate", "wikipedia_search", "define_word", "anime_search", "github_repo",
+    "world_time", "daily_quote", "hackernews_feed", "shorten_url", "random_fact", "translate_text", "free_tools_catalog",
+    "dad_joke", "number_fact", "ip_lookup", "qr_code", "nasa_apod", "cat_fact", "country_info",
 }
 
 RISK = {"safe", "risky", "dangerous"}
@@ -41,6 +44,19 @@ ACTION_MIN_RISK = {
 }
 CONFIRM_ACTIONS = {action for action, risk in ACTION_MIN_RISK.items() if risk != "safe"} | {"download_song", "download_chapter", "register_managed_project", "provision_managed_project", "create_poll", "set_auto_rename", "track_series", "update_tracked_series"}
 TARGET_ACTIONS = {"ban_user", "unban_user", "kick_user", "mute_user", "unmute_user", "restrict_user", "unrestrict_user", "demote_user", "promote_user", "warn_user", "member_profile", "show_warnings"}
+
+_LANG_ALIASES = {
+    "english": "en", "spanish": "es", "french": "fr", "german": "de", "italian": "it", "portuguese": "pt",
+    "russian": "ru", "japanese": "ja", "korean": "ko", "chinese": "zh", "arabic": "ar", "hindi": "hi",
+    "dutch": "nl", "polish": "pl", "turkish": "tr", "vietnamese": "vi", "indonesian": "id",
+}
+
+
+def _language_code(value: str) -> str:
+    low = value.strip().lower()
+    if len(low) == 2:
+        return low
+    return _LANG_ALIASES.get(low, low[:2] or "en")
 
 
 @dataclass
@@ -304,6 +320,7 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             "/skills": ("list_skills", "List enabled skills"), "/roles": ("show_agent_roles", "Show Lily’s specialist roles"),
             "/scenarios": ("list_scenarios", "List NEXUS scenario runbooks"), "/runbook": ("list_scenarios", "List NEXUS scenario runbooks"),
             "/briefing": ("admin_briefing", "Show Lily ops briefing"), "/ragdebug": ("rag_debug", "Diagnose knowledge routing"),
+            "/tools": ("free_tools_catalog", "Show free API lookup tools"),
             "/queue": ("queue_list", "List encoding jobs"), "/projects": ("code_project_status", "Show recent code-project jobs"),
             "/controls": ("group_controls_status", "Show group control status"), "/diagnostics": ("group_diagnostics", "Show group moderation diagnostics"),
             "/rules": ("show_group_rules", "Show group rules"), "/locks": ("list_locks", "List group locks"),
@@ -361,6 +378,75 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
             return Plan(intent="start_intake", summary=f"Start a structured {intake_kind} intake", action="start_intake", risk="safe", args={"kind": intake_kind, "text": value}, confidence=0.88)
         if any(phrase in low for phrase in ("intake status", "show intake")):
             return Plan(intent="show_intake", summary="Show the latest structured intake packet", action="show_intake", risk="safe", confidence=0.9)
+        if settings.enable_free_tools:
+            if any(phrase in low for phrase in ("free tools", "free apis", "what can lily look up", "lookup tools")):
+                return Plan(intent="free_tools_catalog", summary="Show Lily free API tools", action="free_tools_catalog", risk="safe", confidence=0.98)
+            if any(word in low for word in ("weather", "forecast", "temperature")) and any(word in low for word in ("in ", "for ", "at ")):
+                location = re.sub(r"^.*?(?:weather|forecast|temperature)\s+(?:in|for|at)\s+", "", value, flags=re.I).strip() or re.sub(r"^.*?(?:what(?:'s| is) the weather)\s+(?:in|for|at)\s+", "", value, flags=re.I).strip()
+                return Plan(intent="weather_lookup", summary=f"Weather for {location or 'your location'}", action="weather_lookup", risk="safe", args={"location": location}, missing=[] if location else ["Provide a city or place name"], confidence=0.9)
+            if any(phrase in low for phrase in ("bitcoin price", "crypto price", "ethereum price", "coin price")) or ("price" in low and any(word in low for word in ("btc", "eth", "bitcoin", "ethereum", "solana", "dogecoin", "crypto"))):
+                symbol = next((word for word in ("bitcoin", "ethereum", "solana", "dogecoin", "cardano", "ripple", "btc", "eth", "sol") if word in low), "bitcoin")
+                return Plan(intent="crypto_price", summary=f"Crypto price for {symbol}", action="crypto_price", risk="safe", args={"symbol": symbol}, confidence=0.9)
+            convert_match = re.search(r"(?:convert|exchange)\s+(\d+(?:\.\d+)?)\s*([a-z]{3})\s+(?:to|into)\s+([a-z]{3})", low)
+            if convert_match or ("exchange rate" in low):
+                if convert_match:
+                    return Plan(intent="exchange_rate", summary="Convert currency", action="exchange_rate", risk="safe", args={"base": convert_match.group(2).upper(), "target": convert_match.group(3).upper(), "amount": float(convert_match.group(1))}, confidence=0.9)
+                parts = re.findall(r"\b([a-z]{3})\b", low)
+                if len(parts) >= 2:
+                    return Plan(intent="exchange_rate", summary=f"Exchange rate {parts[0].upper()} to {parts[1].upper()}", action="exchange_rate", risk="safe", args={"base": parts[0].upper(), "target": parts[1].upper(), "amount": 1.0}, confidence=0.85)
+            if any(phrase in low for phrase in ("wikipedia", "wiki ")) or low.startswith("wiki "):
+                query = re.sub(r"^.*?(?:wikipedia|wiki)\s*(?:search|for|about)?\s*", "", value, flags=re.I).strip()
+                return Plan(intent="wikipedia_search", summary=f"Wikipedia: {query}", action="wikipedia_search", risk="safe", args={"query": query}, missing=[] if query else ["Provide a Wikipedia topic"], confidence=0.9)
+            define_match = re.search(r"(?:define|meaning of|what does)\s+[\"']?([a-zA-Z\-']+)", value, re.I)
+            if define_match:
+                return Plan(intent="define_word", summary=f"Define {define_match.group(1)}", action="define_word", risk="safe", args={"word": define_match.group(1)}, confidence=0.9)
+            if "anime search" in low or ("anime" in low and "search" in low):
+                query = re.sub(r"^.*?anime\s+search\s*(?:for)?\s*", "", value, flags=re.I).strip()
+                return Plan(intent="anime_search", summary=f"Search anime: {query}", action="anime_search", risk="safe", args={"query": query}, missing=[] if query else ["Provide an anime title"], confidence=0.9)
+            managed_bot = any(word in low for word in ("register bot", "register project", "create bot project", "provision bot", "install bot project", "clone bot project"))
+            if not managed_bot:
+                gh_match = re.search(r"github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)", value)
+                if gh_match or (re.search(r"\bgithub\b", low) and re.search(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value)):
+                    repo = gh_match.group(1) if gh_match else next((part for part in re.findall(r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)", value) if "/" in part and "github.com" not in part), "")
+                    if repo and repo.count("/") == 1:
+                        return Plan(intent="github_repo", summary=f"GitHub repo {repo}", action="github_repo", risk="safe", args={"repo": repo}, confidence=0.9)
+            if any(phrase in low for phrase in ("dad joke", "tell me a joke", "make me laugh")) or (low.endswith(" joke") and "random fact" not in low):
+                return Plan(intent="dad_joke", summary="Share a dad joke", action="dad_joke", risk="safe", confidence=0.95)
+            number_match = re.search(r"(?:number fact|fact about)\s+(\d+)", low)
+            if number_match:
+                return Plan(intent="number_fact", summary=f"Fact about {number_match.group(1)}", action="number_fact", risk="safe", args={"number": number_match.group(1)}, confidence=0.9)
+            ip_match = re.search(r"\b(?:ip lookup|lookup ip|whois ip|ip info)\s+(\d{1,3}(?:\.\d{1,3}){3})\b", low)
+            if ip_match:
+                return Plan(intent="ip_lookup", summary=f"IP lookup {ip_match.group(1)}", action="ip_lookup", risk="safe", args={"ip": ip_match.group(1)}, confidence=0.9)
+            qr_match = re.search(r"(?:qr code|make qr|generate qr)\s+(?:for\s+)?(.+)$", value, re.I)
+            if qr_match:
+                data = qr_match.group(1).strip().strip("\"'")
+                return Plan(intent="qr_code", summary="Generate a QR code", action="qr_code", risk="safe", args={"data": data}, missing=[] if data else ["Provide text or a URL for the QR code"], confidence=0.9)
+            if any(phrase in low for phrase in ("nasa apod", "astronomy picture", "space picture of the day", "nasa picture")):
+                return Plan(intent="nasa_apod", summary="NASA astronomy picture of the day", action="nasa_apod", risk="safe", confidence=0.95)
+            if any(phrase in low for phrase in ("cat fact", "random cat fact")):
+                return Plan(intent="cat_fact", summary="Share a cat fact", action="cat_fact", risk="safe", confidence=0.95)
+            country_match = re.search(r"(?:country info|info about country|about the country)\s+(.+)$", value, re.I)
+            if country_match:
+                country = country_match.group(1).strip().strip(".")
+                return Plan(intent="country_info", summary=f"Country info: {country}", action="country_info", risk="safe", args={"country": country}, confidence=0.9)
+            if any(phrase in low for phrase in ("time in ", "what time is it in ", "current time in ")):
+                city = re.sub(r"^.*?(?:time in|what time is it in|current time in)\s+", "", value, flags=re.I).strip()
+                return Plan(intent="world_time", summary=f"World time for {city}", action="world_time", risk="safe", args={"city": city}, missing=[] if city else ["Provide a city or timezone"], confidence=0.9)
+            if any(phrase in low for phrase in ("daily quote", "random quote", "inspire me", "motivational quote")):
+                return Plan(intent="daily_quote", summary="Share an inspirational quote", action="daily_quote", risk="safe", confidence=0.95)
+            if "hacker news" in low or "hackernews" in low or low.startswith("hn "):
+                topic = re.sub(r"^.*?(?:hacker news|hackernews|hn)\s*", "", value, flags=re.I).strip() or "top"
+                return Plan(intent="hackernews_feed", summary=f"Hacker News {topic}", action="hackernews_feed", risk="safe", args={"topic": topic}, confidence=0.9)
+            if "shorten" in low and re.search(r"https?://", value):
+                url = next(iter(re.findall(r"https?://\S+", value)), "")
+                return Plan(intent="shorten_url", summary="Shorten a URL", action="shorten_url", risk="safe", args={"url": url}, confidence=0.9)
+            if any(phrase in low for phrase in ("random fact", "fun fact", "tell me a fact")):
+                return Plan(intent="random_fact", summary="Share a random fact", action="random_fact", risk="safe", confidence=0.95)
+            translate_match = re.search(r"translate\s+(.+?)\s+to\s+([a-zA-Z]+)", value, re.I)
+            if translate_match:
+                target = _language_code(translate_match.group(2))
+                return Plan(intent="translate_text", summary=f"Translate to {target}", action="translate_text", risk="safe", args={"text": translate_match.group(1).strip(), "target": target}, confidence=0.9)
         if any(phrase in low for phrase in ("text to speech", "generate speech", "make speech", "read aloud", "say this aloud", "voice this text")):
             script = re.sub(r"^.*?(?:text to speech|generate speech|make speech|read aloud|say this aloud|voice this text)\s*[:,-]?\s*", "", value, flags=re.I).strip()
             voice_match = re.search(r"\bvoice\s+(Zephyr|Puck|Charon|Kore|Fenrir|Leda|Orus|Aoede|Callirrhoe|Autonoe|Enceladus|Iapetus|Umbriel|Algieba|Despina|Erinome|Algenib|Rasalgethi|Laomedeia|Achernar|Alnilam|Schedar|Gacrux|Pulcherrima|Achird|Zubenelgenubi|Vindemiatrix|Sadachbia|Sadaltager|Sulafat)\b", value, re.I)
