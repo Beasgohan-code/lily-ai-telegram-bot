@@ -28,7 +28,7 @@ from lily.code_workspace import CodeWorkspace
 from lily.skill_engine import select_skill
 from lily.service_supervisor import ManagedServiceSupervisor, ProcessResult, SupervisorError
 from lily.agent_roles import assign_roles, catalog as agent_role_catalog, catalog_summary
-from lily.miniapp_bridge import MiniAppAuthError, MiniAppUser, _safe_event_rows, install_miniapp_routes, miniapp_owner_access, public_miniapp_plan, public_model_status, validate_init_data
+from lily.miniapp_bridge import MiniAppAuthError, MiniAppUser, _is_administrator, _public_review_rows, _safe_event_rows, install_miniapp_routes, miniapp_owner_access, public_miniapp_plan, public_model_status, public_operational_status, validate_init_data
 from lily.model_router import ModelProfile, ModelRouter
 from lily.plugin_manager import plugin_manager
 from lily.db import Database
@@ -519,33 +519,67 @@ class LilyCoreTests(unittest.TestCase):
         self.assertIn("/miniapp/v1/panel/owner", paths)
         self.assertIn("/miniapp/v1/panel/group", paths)
 
+    def test_miniapp_operations_groups_and_review_payloads_are_bounded(self):
+        config = Settings(bot_token="test-token", enable_miniapp_bridge=True, admin_user_ids=(77,))
+        status = public_operational_status([{"available": True}, {"available": False}], config)
+        self.assertEqual(status["api_bridge"], "enabled")
+        self.assertEqual(status["available_model_count"], 1)
+        self.assertFalse(_is_administrator({"status": "member"}))
+        self.assertTrue(_is_administrator({"status": "administrator"}))
+        reviews = _public_review_rows([{"id": 8, "status": "open", "created_at": 123, "target_user_id": 456, "reporter_id": 789, "reason": "private detail"}])
+        payload = json.dumps(reviews)
+        self.assertEqual(reviews, [{"id": 8, "status": "open", "created_at": 123, "target_present": True}])
+        self.assertNotIn("private detail", payload)
+        self.assertNotIn("456", payload)
+        self.assertNotIn("789", payload)
+
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as directory:
+                database = Database(str(Path(directory) / "selector.sqlite3"))
+                await database.init()
+                async with database.connect() as connection:
+                    await connection.execute("INSERT INTO chats(chat_id,title,settings_json,created_at,updated_at) VALUES(?,?,?,?,?)", (-1009, "Trusted group", "{}", 1, 5))
+                    await connection.execute("INSERT INTO chats(chat_id,title,settings_json,created_at,updated_at) VALUES(?,?,?,?,?)", (77, "Private", "{}", 1, 10))
+                    await connection.commit()
+                self.assertEqual(await database.list_known_group_chats(), [{"chat_id": -1009, "title": "Trusted group", "updated_at": 5}])
+        asyncio.run(run())
+
     def test_miniapp_panel_endpoints_require_signed_configured_owner_and_live_group_admin(self):
         token = "panel-test-token"
-        values = {"auth_date": str(int(time.time())), "query_id": "PANEL", "user": json.dumps({"id": 77, "first_name": "Lily"}, separators=(",", ":"))}
-        check_string = "\n".join(f"{key}={values[key]}" for key in sorted(values))
-        secret = hmac.new(b"WebAppData", token.encode("utf-8"), hashlib.sha256).digest()
-        init_data = urlencode({**values, "hash": hmac.new(secret, check_string.encode("utf-8"), hashlib.sha256).hexdigest()})
+        def signed_init_data(user_id: int) -> str:
+            values = {"auth_date": str(int(time.time())), "query_id": "PANEL", "user": json.dumps({"id": user_id, "first_name": "Lily"}, separators=(",", ":"))}
+            check_string = "\n".join(f"{key}={values[key]}" for key in sorted(values))
+            secret = hmac.new(b"WebAppData", token.encode("utf-8"), hashlib.sha256).digest()
+            return urlencode({**values, "hash": hmac.new(secret, check_string.encode("utf-8"), hashlib.sha256).hexdigest()})
 
         async def run():
             with tempfile.TemporaryDirectory() as directory:
                 database = Database(str(Path(directory) / "panel.sqlite3"))
                 await database.init()
+                await database.get_chat_settings(-100_123, "Verified crew")
                 await database.audit(-100_123, 77, "configure_group_control", {"secret": "not public"})
+                report_id = await database.create_report(-100_123, 501, 502, "private moderator report")
                 app = FastAPI()
                 config = Settings(bot_token=token, enable_miniapp_bridge=True, miniapp_init_data_ttl_seconds=86_400, admin_user_ids=(77,))
                 install_miniapp_routes(app, database, config)
 
                 async def administrator_call(method, payload):
                     self.assertEqual(method, "getChatMember")
-                    self.assertEqual(payload, {"chat_id": -100_123, "user_id": 77})
-                    return {"status": "administrator"}
+                    self.assertEqual(payload["chat_id"], -100_123)
+                    return {"status": "administrator" if payload["user_id"] == 77 else "member"}
 
                 transport = httpx.ASGITransport(app=app)
                 async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-                    headers = {"X-Telegram-Init-Data": init_data}
+                    headers = {"X-Telegram-Init-Data": signed_init_data(77)}
+                    non_admin_headers = {"X-Telegram-Init-Data": signed_init_data(78)}
                     with patch("lily.miniapp_bridge.rich.call", new=AsyncMock(side_effect=administrator_call)):
                         owner = await client.get("/miniapp/v1/panel/owner", headers=headers)
                         group = await client.get("/miniapp/v1/panel/group", params={"chat_id": -100_123}, headers=headers)
+                        operations = await client.get("/miniapp/v1/operations/status", headers=headers)
+                        groups = await client.get("/miniapp/v1/groups", headers=headers)
+                        reviews = await client.get("/miniapp/v1/panel/reviews", params={"chat_id": -100_123}, headers=headers)
+                        other_groups = await client.get("/miniapp/v1/groups", headers=non_admin_headers)
+                        denied_reviews = await client.get("/miniapp/v1/panel/reviews", params={"chat_id": -100_123}, headers=non_admin_headers)
                     self.assertEqual(owner.status_code, 200)
                     self.assertEqual(owner.json()["aggregates"]["audit_log"], 1)
                     self.assertNotIn("secret", json.dumps(owner.json()))
@@ -553,6 +587,20 @@ class LilyCoreTests(unittest.TestCase):
                     self.assertEqual(group.json()["role"], "group_admin")
                     self.assertEqual(group.json()["recent_activity"], [{"event": "configure_group_control", "created_at": group.json()["recent_activity"][0]["created_at"]}])
                     self.assertNotIn("secret", json.dumps(group.json()))
+                    self.assertEqual(operations.status_code, 200)
+                    self.assertEqual(operations.json()["api_bridge"], "enabled")
+                    self.assertNotIn("provider", json.dumps(operations.json()).lower())
+                    self.assertNotIn("error", json.dumps(operations.json()).lower())
+                    self.assertEqual(groups.json()["groups"], [{"chat_id": -100_123, "title": "Verified crew", "updated_at": groups.json()["groups"][0]["updated_at"]}])
+                    self.assertEqual(other_groups.status_code, 200)
+                    self.assertEqual(other_groups.json()["groups"], [])
+                    self.assertEqual(reviews.status_code, 200)
+                    self.assertEqual(reviews.json()["reviews"], [{"id": report_id, "status": "open", "created_at": reviews.json()["reviews"][0]["created_at"], "target_present": True}])
+                    review_payload = json.dumps(reviews.json())
+                    self.assertNotIn("private moderator report", review_payload)
+                    self.assertNotIn("501", review_payload)
+                    self.assertNotIn("502", review_payload)
+                    self.assertEqual(denied_reviews.status_code, 403)
         asyncio.run(run())
 
     def test_managed_service_supervisor_is_allowlisted_owned_and_redacted(self):

@@ -125,6 +125,37 @@ def _safe_event_rows(events: list[dict[str, Any]]) -> list[dict[str, object]]:
     return [{"event": str(event.get("event") or "activity")[:80], "created_at": int(event.get("created_at") or 0)} for event in events[:12]]
 
 
+def _is_administrator(membership: object) -> bool:
+    return isinstance(membership, dict) and str(membership.get("status") or "") in {"creator", "administrator"}
+
+
+def _public_review_rows(reports: list[dict[str, Any]]) -> list[dict[str, object]]:
+    """Panel queue metadata intentionally excludes report content and participant IDs."""
+    return [
+        {
+            "id": int(report.get("id") or 0),
+            "status": str(report.get("status") or "open")[:24],
+            "created_at": int(report.get("created_at") or 0),
+            "target_present": bool(report.get("target_user_id")),
+        }
+        for report in reports[:30]
+        if int(report.get("id") or 0) > 0
+    ]
+
+
+def public_operational_status(models: list[dict[str, object]], config: Settings) -> dict[str, object]:
+    """A configuration snapshot, not an unverified claim that background work is live."""
+    available = sum(1 for model in models if model.get("available"))
+    return {
+        "api_bridge": "enabled" if config.enable_miniapp_bridge else "disabled",
+        "ai_routing": "available" if available else "not_configured",
+        "available_model_count": available,
+        "agent_team": "enabled" if config.enable_agent_team else "disabled",
+        "supervisor": "enabled" if config.enable_managed_service_supervisor else "disabled",
+        "note": "This is a signed configuration snapshot. Verify live bot delivery in Telegram after deployment.",
+    }
+
+
 async def _owner_panel_summary(database: Database) -> dict[str, int]:
     """Return owner-only aggregate counters; never enumerate another user’s work."""
     tables = ("chats", "managed_projects", "code_project_jobs", "audit_log")
@@ -154,8 +185,7 @@ def install_miniapp_routes(app: Any, database: Database = db, config: Settings =
             membership = await rich.call("getChatMember", {"chat_id": chat_id, "user_id": user.id})
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Lily could not verify administrator access for this group.") from exc
-        status = str(membership.get("status") or "") if isinstance(membership, dict) else ""
-        if status not in {"creator", "administrator"}:
+        if not _is_administrator(membership):
             raise HTTPException(status_code=403, detail="This signed Telegram user is not an administrator of that group.")
         return user
 
@@ -181,6 +211,26 @@ def install_miniapp_routes(app: Any, database: Database = db, config: Settings =
             "models": models,
             "ai_mode": "free-first configured routing" if any(item["available"] for item in models) else "no available configured model",
         }
+
+    @app.get("/miniapp/v1/operations/status")
+    async def miniapp_operations_status(request: Request):
+        await user_from_request(request)
+        return public_operational_status(public_model_status(await ai.status()), config)
+
+    @app.get("/miniapp/v1/groups")
+    async def miniapp_groups(request: Request):
+        user = await user_from_request(request)
+        groups = await database.list_known_group_chats(limit=30)
+        allowed: list[dict[str, object]] = []
+        for group in groups:
+            chat_id = int(group["chat_id"])
+            try:
+                membership = await rich.call("getChatMember", {"chat_id": chat_id, "user_id": user.id})
+            except Exception:
+                continue
+            if _is_administrator(membership):
+                allowed.append({"chat_id": chat_id, "title": str(group.get("title") or "Group")[:160], "updated_at": int(group.get("updated_at") or 0)})
+        return {"groups": allowed, "notice": "Only locally known groups where your signed Telegram user is currently an administrator are shown."}
 
     @app.get("/miniapp/v1/panel/owner")
     async def miniapp_owner_panel(request: Request):
@@ -227,6 +277,16 @@ def install_miniapp_routes(app: Any, database: Database = db, config: Settings =
             "controls": [{"key": key, "enabled": bool(controls.get(key, control.default_enabled)), "label": control.label, "risk": control.risk} for key, control in GROUP_CONTROL_MAP.items()],
             "recent_activity": _safe_event_rows(events),
             "notice": "This panel is read-only. Open Lily in Telegram to prepare and confirm any group change.",
+        }
+
+    @app.get("/miniapp/v1/panel/reviews")
+    async def miniapp_moderation_reviews(request: Request, chat_id: int):
+        await group_admin_from_request(request, chat_id)
+        reports = await database.list_reports(chat_id, status="open", limit=30)
+        return {
+            "chat_id": chat_id,
+            "reviews": _public_review_rows(reports),
+            "notice": "This queue exposes only report status metadata. Use Lily in Telegram to inspect details or prepare a confirmation-gated resolution.",
         }
 
     @app.post("/miniapp/v1/assistant/preview")

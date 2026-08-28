@@ -494,6 +494,16 @@ class Database:
                 result.append(item)
             return result
 
+    async def list_known_group_chats(self, limit: int = 30) -> list[dict[str, Any]]:
+        """Return bounded locally known group chat records for membership verification."""
+        bounded = max(1, min(int(limit), 30))
+        async with self.connect() as db:
+            rows = await (await db.execute(
+                "SELECT chat_id,title,updated_at FROM chats WHERE chat_id<0 ORDER BY updated_at DESC LIMIT ?",
+                (bounded,),
+            )).fetchall()
+            return [dict(row) for row in rows]
+
     async def _usage(self, scope: str, scope_id: int, field: str, amount: int, daily: int, monthly: int) -> tuple[bool, str]:
         now = time.gmtime()
         day = time.strftime("%Y-%m-%d", now)
