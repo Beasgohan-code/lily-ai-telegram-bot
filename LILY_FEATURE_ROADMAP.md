@@ -1,5 +1,16 @@
 # Lily Feature Roadmap
 
+## Newly implemented (agency upgrade)
+
+- **NEXUS scenario runbooks** — `startup-mvp`, `incident-response`, `content-launch`, `community-growth`, and `deep-research` phased workflows with specialist rosters.
+- **Handoff cards** — standardized From/To packets with acceptance criteria for multi-role plans.
+- **RAG knowledge routing** — automatic collection selection from bundled operating skills before planning.
+- **Deep research orchestrator** — parallel scout waves with cited synthesis (`Lily, deep research: …`).
+- **RAG diagnostics** — P01–P12 failure pattern taxonomy via `/ragdebug`.
+- **Admin ops briefing** — queue health and open-report digest via `/briefing`.
+- **Structured intake packets** — moderation, deployment, and research intake with blocking-field tracking.
+- **Dev↔QA loop** — bounded code-project review with up to 3 retry attempts before escalation notes.
+
 ## Newly implemented
 
 Lily now supports safe media inspection through a natural-language request such as `Lily show file details for this video`. The tool downloads the replied media into Lily’s managed workspace, calls FFprobe, presents format, size, duration, codec, and dimensions in a rich table, and deletes the temporary input afterward.
