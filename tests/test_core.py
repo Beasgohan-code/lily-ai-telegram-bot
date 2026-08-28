@@ -1285,6 +1285,33 @@ class LilyCoreTests(unittest.TestCase):
         )
         self.assertEqual(register.action, "register_managed_project")
 
+    def test_cli_route_and_redacted_config(self):
+        from lily.cli import _heuristic_route, build_parser
+        from lily.cli_output import redacted_config
+        from lily.config import settings
+
+        report = _heuristic_route("Lily weather in Paris")
+        self.assertEqual(report["action"], "weather_lookup")
+        self.assertFalse(report["executes"])
+        config = redacted_config(settings)
+        serialized = json.dumps(config).lower()
+        if settings.bot_token:
+            self.assertNotIn(settings.bot_token, serialized)
+        if settings.openai_api_key:
+            self.assertNotIn(settings.openai_api_key, serialized)
+        self.assertIn("enable_free_tools", config)
+        parser = build_parser()
+        args = parser.parse_args(["route", "Lily wiki Python"])
+        self.assertEqual(args.command, "route")
+        self.assertEqual(args.text, "Lily wiki Python")
+
+    def test_cli_tools_catalog_parser(self):
+        from lily.cli import build_parser
+        parser = build_parser()
+        args = parser.parse_args(["tools", "catalog"])
+        self.assertEqual(args.command, "tools")
+        self.assertEqual(args.tool_command, "catalog")
+
     def test_free_tools_catalog_is_bounded(self):
         from lily.free_tools import free_tools
         catalog = free_tools.catalog()

@@ -109,15 +109,24 @@ For spoken audio, set `LILY_SPEECH_GENERATION_URL` and `LILY_SPEECH_GENERATION_A
 
 ## Agent CLI
 
-The same model-aware Lily agent can be used from a terminal after configuration:
+Lily ships a full **operator CLI** for planning, diagnostics, and free API lookups — nothing runs in Telegram without confirmation there.
 
 ```bash
-python3 -m lily.cli status
-python3 -m lily.cli plan "Lily, demote user 12345"
-python3 -m lily.cli ask "Draft a calm moderation message about spam links"
+./commands/cli.sh chat                          # interactive Ask / Plan / Build / Route / Tools
+./commands/cli.sh route "Lily weather in Tokyo" # fast heuristic routing (no LLM)
+./commands/cli.sh tools weather "Paris"         # free API lookup
+./commands/cli.sh scenarios list                # NEXUS runbooks
+./commands/cli.sh doctor --json                 # redacted health snapshot
+./commands/cli.sh plan "Lily demote user 12345"
+./commands/cli.sh team "Ship moderation inbox"
+./commands/cli.sh ask "Draft a calm moderation message"
+./commands/cli.sh rag-debug "wrong answer about bans"
+./commands/cli.sh usage --user-id 12345 --chat-id 67890
 ```
 
-The CLI uses Lily’s configured multi-model fallback router and prints either model health, a strict action plan, or a conversational answer. It does not bypass Telegram permissions; use it for review, debugging, and offline drafting. The Ubuntu console includes `skill-match <chat_id> <user_id> <text>` to preview whether a custom automatic skill or the LLM planner would handle a request, and `skill-runs <chat_id> --user-id <id>` to list redacted outcomes. Neither command executes a Telegram action.
+Global flags: `--json` for machine-readable output, `-q` for quiet mode. Run `./commands/cli.sh --help` for the full command tree.
+
+The CLI uses Lily’s configured multi-model fallback router. It does not bypass Telegram permissions; use it for review, debugging, and offline drafting. `skill-match` and `skill-runs` preview automatic-skill routing without executing Telegram actions.
 
 ## Telegram Mini App
 
@@ -339,7 +348,10 @@ The `commands/` directory contains safe host-operator scripts:
 
 ```bash
 ./commands/check.sh                 # compile and run all tests
+./commands/cli.sh chat              # interactive multi-mode CLI
 ./commands/cli.sh doctor            # redacted local health/config status
+./commands/cli.sh route "Lily wiki Python"  # heuristic routing without LLM
+./commands/cli.sh tools catalog     # list free no-key API tools
 ./commands/cli.sh run-profiles      # fixed approved managed-bot profiles
 ./commands/cli.sh preview "Lily set group title to Anime Club"  # preview only; does not execute
 ./commands/ubuntu-sandbox.sh team "Create a Python API project with tests"  # optional bounded team review; never executes
@@ -358,3 +370,7 @@ These scripts are intentionally for the server operator only; they do not create
 [3]: [Telegram Bot API changelog](https://core.telegram.org/bots/api-changelog)
 [4]: [python-telegram-bot documentation](https://docs.python-telegram-bot.org/)
 [5]: [python-telegram-bot Rich Messages tracking issue](https://github.com/python-telegram-bot/python-telegram-bot/issues/5261)
+
+---
+
+Built with [BrainDaemon](https://braindaemon.com)
