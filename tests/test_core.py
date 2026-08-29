@@ -1322,6 +1322,47 @@ class LilyCoreTests(unittest.TestCase):
         self.assertGreaterEqual(len(catalog), 18)
         self.assertIn("weather", {item["name"] for item in catalog})
 
+    def test_model_router_reuses_a_single_pooled_http_client(self):
+        # Every LLM call used to open a fresh AsyncClient (fresh TCP+TLS handshake
+        # per request). A shared pool must be created lazily and reused.
+        router = ModelRouter([ModelProfile("m", "https://example.test", "key", "gpt-test", "openai", frozenset({"chat", "structured"}))])
+        first = router._http()
+        second = router._http()
+        self.assertIs(first, second)
+        # A closed pool must be replaced, not returned as a dead client.
+        asyncio.run(router.aclose())
+        replaced = router._http()
+        self.assertIsNot(replaced, first)
+        asyncio.run(router.aclose())
+
+    def test_deep_research_scouts_run_and_preserve_wave_order(self):
+        from lily.research_orchestrator import ResearchOrchestrator
+
+        class FakeSearch:
+            def __init__(self):
+                self.queries: list[str] = []
+                self.fail_on: set[str] = set()
+
+            async def search(self, query, limit=None):
+                self.queries.append(query)
+                if query in self.fail_on:
+                    raise RuntimeError("boom")
+                await asyncio.sleep(0)
+                slug = query.replace(" ", "-")
+                return [{"link": f"https://example.test/{slug}", "title": query, "snippet": "s"}]
+
+        async def run():
+            search = FakeSearch()
+            search.fail_on = {"test query overview"}
+            out = await ResearchOrchestrator(search).run("test query", scouts=3, results_per_scout=1)
+            self.assertEqual(len(search.queries), 3)
+            self.assertEqual([item["wave"] for item in out["waves"]], [1, 2, 3])
+            # The failed scout is recorded with zero results but does not abort the mission.
+            self.assertEqual(out["waves"][1]["result_count"], 0)
+            self.assertEqual(len(out["sources"]), 2)
+
+        asyncio.run(run())
+
 
 if __name__ == "__main__":
     unittest.main()

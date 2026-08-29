@@ -50,6 +50,29 @@ class ModelRouter:
         self.transport = transport
         self._lock = asyncio.Lock()
         self._cursor = 0
+        self._client: httpx.AsyncClient | None = None
+
+    def _http(self) -> httpx.AsyncClient:
+        """Return a shared, connection-pooled AsyncClient.
+
+        Opening an AsyncClient on every chat request forces a fresh TCP+TLS
+        handshake per LLM call, which dominates latency and defeats keep-alive.
+        `Limits` ups the pool so parallel requests (agent team, scouts) can
+        reuse connections instead of serialising on a single one.
+        """
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(60.0, connect=10.0),
+                limits=httpx.Limits(max_connections=32, max_keepalive_connections=16),
+                transport=self.transport,
+            )
+        return self._client
+
+    async def aclose(self) -> None:
+        """Close the shared connection pool (called during application shutdown)."""
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
     def _eligible(self, requirement: str, allow_public: bool, attempted: set[str] | None = None) -> list[ModelProfile]:
         eligible = [profile for profile in self.profiles if requirement in profile.capabilities or requirement == "chat" and "chat" in profile.capabilities]
@@ -196,17 +219,17 @@ class ModelRouter:
             except RuntimeError:
                 break
             endpoint, headers, request = self._endpoint(profile, payload)
+            client = self._http()
             try:
                 for attempt in range(profile.max_retries + 1):
                     started = time.perf_counter()
                     try:
                         timeout = httpx.Timeout(float(payload.get("_timeout", 45.0)), connect=10.0)
-                        async with httpx.AsyncClient(timeout=timeout, transport=self.transport) as client:
-                            response = await client.post(endpoint, headers=headers, json=request)
-                            if response.status_code in {401, 403, 408, 409, 429} or response.status_code >= 500:
-                                raise RuntimeError(f"{profile.key_id} returned HTTP {response.status_code}")
-                            response.raise_for_status()
-                            data = self._normalize_response(profile, response.json())
+                        response = await client.post(endpoint, headers=headers, json=request, timeout=timeout)
+                        if response.status_code in {401, 403, 408, 409, 429} or response.status_code >= 500:
+                            raise RuntimeError(f"{profile.key_id} returned HTTP {response.status_code}")
+                        response.raise_for_status()
+                        data = self._normalize_response(profile, response.json())
                         await self._mark_success(profile, (time.perf_counter() - started) * 1000)
                         return data, profile
                     except Exception as exc:

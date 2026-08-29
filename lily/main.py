@@ -10,7 +10,9 @@ from .config import settings
 from .db import db
 from .handlers import help_message, register_handlers, start
 from .queue_manager import encoding_queue
+from .rich import rich
 from .web_media import stream_links
+from .agent import ai
 
 
 logging.basicConfig(
@@ -42,6 +44,8 @@ async def help_handler(update: Update, context) -> None:
 
 async def post_shutdown(application: Application) -> None:
     await encoding_queue.stop()
+    await ai.aclose()
+    await rich.aclose()
     task = application.bot_data.pop("stream_server_task", None)
     if task:
         task.cancel()

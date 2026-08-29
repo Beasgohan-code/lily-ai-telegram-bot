@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from dataclasses import dataclass, field
@@ -170,6 +171,10 @@ class AIClient:
     async def status(self) -> list[dict[str, Any]]:
         return await self.router.status()
 
+    async def aclose(self) -> None:
+        """Release the shared AI connection pool during shutdown."""
+        await self.router.aclose()
+
     async def _request(self, payload: dict[str, Any], requirement: str = "chat") -> dict[str, Any]:
         request = {**payload, "_allow_public_fallback": settings.allow_public_ai_fallbacks}
         data, _profile = await self.router.chat(request, requirement=requirement)
@@ -274,11 +279,10 @@ Identify only user-visible constraints, risk floors, confirmation needs, and mis
         if not settings.enable_agent_team or not self.providers:
             return plan
         roles = self._team_roles(plan, text, settings.agent_team_max_roles)
-        memos: list[AgentTeamMemo] = []
-        for role in roles:
-            memo = await self._role_memo(role, text, plan)
-            if memo:
-                memos.append(memo)
+        # Role reviews are independent LLM calls; run them concurrently so bounded
+        # approval latency is the slowest memo, not the sum of all of them.
+        results = await asyncio.gather(*(self._role_memo(role, text, plan) for role in roles))
+        memos = [memo for memo in results if memo]
         if not memos:
             return plan
         from .agent_team import merge_role_reviews

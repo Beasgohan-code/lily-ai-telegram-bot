@@ -48,12 +48,18 @@ def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
 class Database:
     def __init__(self, path: str):
         self.path = path
+        self._wal_ready = False
 
     @asynccontextmanager
     async def connect(self):
         db = await aiosqlite.connect(self.path)
         db.row_factory = aiosqlite.Row
-        await db.execute("PRAGMA journal_mode=WAL")
+        # WAL is a persistent database-file setting, so only issue the pragma
+        # once; re-issuing it on every connection adds a round-trip per DB op.
+        if not self._wal_ready:
+            await db.execute("PRAGMA journal_mode=WAL")
+            self._wal_ready = True
+        await db.execute("PRAGMA busy_timeout=5000")
         await db.execute("PRAGMA foreign_keys=ON")
         try:
             yield db
