@@ -1,0 +1,376 @@
+# Lily — AI-first Telegram backend
+
+Lily is a Python backend for an AI-first Telegram assistant and group manager. It uses `python-telegram-bot` for updates and standard Telegram actions, while calling the new RichMessage methods through a small raw HTTP client because the current typed PTB release may not expose every newest rich-message type yet.
+
+## What is implemented
+
+Lily accepts ordinary language instead of requiring a command-driven workflow. A private message or a group mention such as `Lily, ban this user` is converted into a strict action plan. Group moderation, file transformations, and other risky operations are routed through permission checks and confirmation cards with Yes, No, and Details buttons.
+
+The backend includes per-user and per-chat daily and monthly request quotas, daily and monthly byte quotas, SQLite persistence, pending-action expiration, audit logs, custom trigger skills, RichMessage headings/tables/quotations/details, private rich draft progress when supported, document creation in TXT/Markdown/JSON/CSV/HTML/PDF, safe file renaming, ZIP compression, FFmpeg encoding, a rights-respecting direct-audio downloader, fallback AI-key rotation, a channel-post studio, paginated media-search result cards, and a persistent encoding queue manager.
+
+The audio downloader intentionally does **not** scrape or rip streaming platforms. It accepts direct audio URLs only when the administrator explicitly enables downloads and configures an allow-list. Use it only for material you own, have permission to download, or that is legally available for download.
+
+## Current limitations and extension points
+
+Mira-style external integrations, proactive reminders, image generation, deep web research, and advanced memory retrieval are represented as safe router actions and extension points, but they require provider-specific connectors. The core intentionally refuses to claim that such an action completed until an integration is implemented. Lily’s built-in post search indexes posts that Lily publishes itself; searching arbitrary historical channel messages requires an additional authorized Telegram user-session connector and is intentionally not enabled by default.
+
+The new Telegram rich-message methods are called through raw HTTP. This is deliberate: as of the current documentation review, the stable PTB API has local-server support, but the upstream rich-message typed support was still tracked separately. Lily sends RichMessage blocks directly and falls back to HTML `sendMessage` if the local Bot API server does not support RichMessage yet.
+
+## Install
+
+```bash
+cd /home/ubuntu/lily
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+```
+
+Load the `.env` values using your preferred process manager or export them in the shell. Never commit `.env` or a bot token to Git.
+
+## Reliability and continuous verification
+
+Lily contains a top-level Telegram error handler that returns a stable public retry message rather than exposing exception text, provider responses, file paths, raw commands, prompts, or secret values. Full diagnostic information belongs only in protected server-side logs. The repository includes a GitHub Actions workflow that installs declared dependencies, compiles the Python package, and runs the regression suite for every pull request and every push to `main`.
+
+## Local Bot API server
+
+For near-1-GB files, run Telegram’s official Local Bot API Server on the same machine or a private network endpoint. The official API documentation states that the local server can download files without a size limit and upload files up to 2000 MB. Lily therefore defaults to:
+
+```text
+TELEGRAM_API_BASE=http://127.0.0.1:8081/bot
+TELEGRAM_FILE_BASE=http://127.0.0.1:8081/file/bot
+TELEGRAM_LOCAL_MODE=true
+```
+
+The local server requires Telegram API credentials (`api_id` and `api_hash`) and a persistent data directory. Follow the official Local Bot API Server build and run instructions for the current binary/container method. Do not expose the local Bot API server directly to the public internet; place it behind a private network or authenticated reverse proxy.
+
+For a lightweight development run without a local server, set `TELEGRAM_LOCAL_MODE=false` and leave the default Telegram API URLs in place. Large-file guarantees then do not apply.
+
+## AI provider
+
+Lily uses an OpenAI-compatible chat-completions endpoint. Set `OPENAI_API_KEY`, `OPENAI_API_BASE`, and `LILY_AI_MODEL`. The default model is `gpt-5-mini`; the router requests strict JSON-schema output and low reasoning effort for intent planning. The code shows progress stages such as “Checking permissions” and “Preparing compression”; it does not expose private chain-of-thought.
+
+For fallback support, set `LILY_AI_KEYS` to a comma-separated list of keys. Set `LILY_AI_BASES` to the matching comma-separated list of API bases, or provide one base that will be reused for all keys. Lily moves to the next provider after authentication, rate-limit, timeout, conflict, malformed-response, or server errors. It reserves one in-flight health probe per profile, so a burst of user messages does not repeat an initial rate-limited request before the cooldown is published.
+
+For advanced multi-model routing, set `LILY_AI_PROFILES_JSON`. Each profile may define `name`, `api_key`, `base_url`, `model`, `family`, `capabilities`, `priority`, and `max_retries`. Lily selects only profiles supporting the requested capability, converts reasoning and token parameters for GPT, Claude, and Gemini families, records success/failure latency, and temporarily cools down unhealthy profiles. `model_status` can report current health in chat.
+
+### Curated free-tier and local presets
+
+Set `LILY_AI_PRESETS=all` to expose every catalogued provider for which the needed runtime credential is present. Set `LILY_ENABLE_ALL_CATALOG_MODELS=true` only when you intentionally want every listed model registered as a fallback candidate. Lily applies `LILY_FALLBACK_ORDER=free,gemini,openai,groq` across preset and explicit profiles: compatible free/self-hosted profiles are tried first, then Gemini, OpenAI-compatible primary profiles, and finally Groq. Profiles within a tier preserve their configured order.
+
+The vendored CC0 catalog covers Aion Labs, Cohere, Gemini, Mistral, Z AI, Cloudflare Workers AI, Groq, Hugging Face, Kilo, LLM7, ModelScope, NVIDIA NIM, Ollama Cloud, OpenRouter, OVHcloud, SiliconFlow, and local Ollama. Cohere, Gemini, and Cloudflare use native adapter families; compatible providers use Lily’s OpenAI-style router. `LILY_ALLOW_PUBLIC_AI_FALLBACKS=false` blocks public or anonymous profiles by default, so Kilo, LLM7, OpenRouter free routing, and OVH anonymous mode cannot receive group memory, files, moderation evidence, or other sensitive context until an administrator deliberately opts in.
+
+## Search pagination and encoding queue
+
+Search results are stored in short-lived, owner-bound pagination sessions. Lily renders a page of results with previous, next, refresh, and close buttons, and rejects button presses from other users. Encoding jobs are persisted in SQLite with queued, running, completed, failed, and cancelled states. After approval, an encode request enters the background queue and receives refresh/cancel controls. A cancelled queued job is skipped before the worker starts it; a running job’s task is cancelled and its state is recorded.
+
+## AI-first group controls
+
+Lily now ships a **64-control group-management catalogue** that an admin operates in normal language. The categories cover member governance, member moderation, content locks, anti-spam, rules and automations, and privacy/intelligence. Examples include: “Enable caps control”, “Disable forward lock”, “Trust this member”, “Block domain example.com”, “Show group controls”, “Show open reports”, “Resolve report 12”, and “Approve join request for 123456789”. Member-affecting actions, policy changes, mass deletion, and join decisions remain confirmation-gated and Lily also checks its own Telegram rights before execution.
+
+The current live policy engine enforces locks, forwarded-message restrictions, blocked domains, duplicate text, caps spam, excessive mentions, invite-link and emoji limits, suspicious-text reporting, media flooding, new-member cooldown and limits, filters, flood control, trusted-member exemptions, configurable warning escalation, reports, case notes, member verification, welcome/goodbye flows, and audit events. Scheduled posts, recurring summaries, and inactivity alerts remain persisted controls awaiting an always-on scheduler.
+
+## Expanded agent tools
+
+Lily now supports richer Rose-style operations through ordinary language: promote, demote, ban, unban, kick, mute, temporary text-only or read-only restrictions, restore permissions, warn, inspect and clear warnings, configure a bounded warning-to-restriction escalation, pin and unpin, purge, filters, locks, rules, welcome/goodbye configuration, member verification, trusted members, domain blocks, reports, private moderator case notes, polls, and group diagnostics. A confirmation gate remains mandatory for risky changes. The promotion profile intentionally omits promotion rights, so a newly promoted moderator cannot promote other accounts. The `auto_rename_enabled` and `auto_rename_template` chat settings can rename bare uploads automatically; source extensions are preserved and invalid filename characters are removed.
+
+Additional group-management skills now include group-wide **read-only mode** and normal-participation restoration, limited or expiring invite links, revocation of bot-created invite links, forum-topic creation and lifecycle management, an administrator roster, and current member count. All state-changing operations are treated as dangerous and require the requesting administrator’s explicit confirmation. Lily calls only fixed Telegram API methods for these skills and records a compact audit event; it does not construct shell commands or permit role-specific tool access. Forum actions need a forum-enabled chat and the bot’s topic-management right. Default-permission changes require the bot’s member-restriction right, while invite-link operations require the relevant invitation right.[1]
+
+Lily also supports a bounded **group announcement** and **checklist** publisher, global removal of pinned messages, and group sticker-set configuration. For example, say `Lily, group announcement: Maintenance starts at 8 PM` or `Lily, create checklist: Release tasks | Run tests | Review logs`. Announcements are capped at 3,000 characters; checklist titles and items are bounded; both require confirmation and are recorded in the audit log. `Lily, clear all pins`, `Lily, set group sticker set to team_stickers`, and `Lily, remove group sticker set` are dangerous administrator actions that require confirmation and call only their respective fixed Telegram API methods. Lily does not infer or download sticker packs, and it rejects invalid sticker-set short names.
+
+For fast common requests, Lily recognizes a compact custom-alias layer alongside ordinary language. These aliases map to the same central action plans; they are **not** a generic command interpreter.
+
+| Alias or shorthand | Lily action | Safety behavior |
+|---|---|---|
+| `/help`, `/start` | Show Lily help | Read-only. |
+| `/usage`, `/limits`, `/models`, `/skills`, `/roles` | Show user, model, skill, or role status | Read-only; provider secrets and internal errors remain hidden. |
+| `/scenarios`, `/runbook` | List NEXUS scenario runbooks | Read-only workflow catalog. |
+| `/briefing` | Admin operations digest | Read-only; queue and report counts. |
+| `/ragdebug` | Diagnose knowledge routing issues | Read-only P01–P12 pattern report. |
+| `/tools` | Show free no-key API lookup tools | Read-only catalog. |
+| `/queue`, `/projects`, `/controls`, `/diagnostics`, `/rules`, `/locks`, `/filters`, `/admins` | Show scoped work, group, or moderation status | Uses the existing chat and administrator boundary where applicable. |
+| `/id`, `/ids` | Show the current user/chat/topic identifiers | Read-only; identifiers grant no permission. |
+| `/announce <text>` | Prepare a group announcement | Confirmation and administrator gate required. |
+| `/checklist Title \| Item 1 \| Item 2` | Prepare a bounded group checklist | Confirmation and administrator gate required. |
+| `/lockgroup`, `/unlockgroup`, `/clearpins` | Change group defaults or remove pins | Dangerous; confirmation and administrator checks required. |
+| `Lily timeout @user for 15m`, `Lily silence this member`, `Lily unsilence this member` | Timed mute or unmute | Dangerous; Lily needs an actual reply or numeric user ID and confirmation. |
+
+Lily recognizes compact time expressions such as `15m`, `2h`, and `1d` for a mute/timeout request, clamps them to the existing maximum restriction window, and always asks for confirmation. It also recognizes `unlock links` as an unlock operation rather than turning the lock on.
+
+For streaming, reply to a Lily-managed file and ask for a direct streaming link. Lily downloads the file to managed storage, generates an expiring HMAC-signed URL, and exposes it through the optional FastAPI stream service. Set `LILY_STREAM_PUBLIC_BASE_URL` to an HTTPS reverse-proxy URL before enabling this feature. Do not expose the stream port directly to the internet or use it for files outside Lily’s managed work/download directories.
+
+For web search, Lily uses the configured search endpoint and returns rich result tables plus expandable snippets. The default is DuckDuckGo’s Instant Answer endpoint; configure an alternative compatible provider if you need broader coverage.
+
+## Image, video, and text-to-speech generation
+
+Lily has provider-neutral image and video generation adapters. Set `LILY_IMAGE_GENERATION_URL` or `LILY_VIDEO_GENERATION_URL` and the matching API key for an authorized provider. Each endpoint receives a `prompt`, `aspect_ratio`, and `kind`; video requests also receive `duration_seconds`. The provider must return a top-level `url`, `output_url`, `image_url`, or `video_url` (or an equivalent first item under `data`/`outputs`). Lily asks for confirmation before a generation request so configured providers are not used accidentally.
+
+For spoken audio, set `LILY_SPEECH_GENERATION_URL` and `LILY_SPEECH_GENERATION_API_KEY`. Lily accepts a user request such as `Lily, read aloud: Welcome to the community, voice Kore`, limits its script with `LILY_SPEECH_MAX_CHARS` (default 1,800), requires confirmation, and accepts only the documented built-in voice names. The configured provider receives a structured `{kind: "speech", text, voice, language_code}` request and must return `audio_url`, `url`, or `output_url`. Lily does not silently send text to an unconfigured or anonymous voice provider. The Mini App’s **Read preview** button is separate: it uses the visitor’s device-local speech capability only after a click and speaks only the already-public plan summary.
+
+## Agent CLI
+
+Lily ships a full **operator CLI** for planning, diagnostics, and free API lookups — nothing runs in Telegram without confirmation there.
+
+```bash
+./commands/cli.sh chat                          # interactive Ask / Plan / Build / Route / Tools
+./commands/cli.sh route "Lily weather in Tokyo" # fast heuristic routing (no LLM)
+./commands/cli.sh tools weather "Paris"         # free API lookup
+./commands/cli.sh scenarios list                # NEXUS runbooks
+./commands/cli.sh doctor --json                 # redacted health snapshot
+./commands/cli.sh plan "Lily demote user 12345"
+./commands/cli.sh team "Ship moderation inbox"
+./commands/cli.sh ask "Draft a calm moderation message"
+./commands/cli.sh rag-debug "wrong answer about bans"
+./commands/cli.sh usage --user-id 12345 --chat-id 67890
+```
+
+Global flags: `--json` for machine-readable output, `-q` for quiet mode. Run `./commands/cli.sh --help` for the full command tree.
+
+The CLI uses Lily’s configured multi-model fallback router. It does not bypass Telegram permissions; use it for review, debugging, and offline drafting. `skill-match` and `skill-runs` preview automatic-skill routing without executing Telegram actions.
+
+## Telegram Mini App
+
+The `lily-miniapp/` project is a liquid-glass Telegram Web App control room with a Three.js ambient signal layer, restrained Anime.js reveal motion, accessible icon controls, a device-local **Read preview** control, live requester-scoped project/service data, and safe AI plan previews. Its public plan surface is deliberately non-executing: approvals and all action execution remain in Telegram.
+
+Lily includes a server-side FastAPI bridge for this dashboard. The bridge validates the raw Telegram `initData` HMAC with the bot token, applies a bounded auth timestamp, and returns only the authenticated user’s code-project jobs, managed-project summaries, model availability, safety-enforced AI previews, verified group list, redacted review metadata, and operational configuration snapshot. It never returns plan arguments, provider errors, credentials, private role memos, raw tool calls, model reasoning, report reasons, or Telegram member identifiers. The Mini App server relay accepts only six allow-listed API paths and keeps the configured Lily API base URL out of browser code.
+
+The Mini App also has separate **Group Admin** and **Owner** desks. The Group Admin desk uses a signed **verified group selector**: it lists only locally known group records where Lily can confirm the signed Telegram user is currently an administrator. After selection, Lily returns that group’s control summary, report/filter counts, a bounded operational configuration snapshot, and a redacted review queue. The review queue exposes only report ID, state, timestamp, and whether a member target exists; report reasons, reporter IDs, target IDs, and private case notes are never returned. Owner requires the signed Telegram ID to exist in the server-side `LILY_ADMIN_USER_IDS` list; it can view bounded aggregate counters and feature-gate status but cannot start services, alter deployments, change policies, or elevate any account. Both desks are read-only. Operational status is a configuration snapshot, not proof of bot delivery or worker uptime. Group changes and any report resolution must still be prepared and explicitly confirmed in Telegram.
+
+The bridge remains **disabled by default**. Before activation, deploy the FastAPI bridge behind HTTPS; set `LILY_ENABLE_MINIAPP_BRIDGE=true`; set `LILY_MINIAPP_ALLOWED_ORIGINS` to the exact HTTPS Mini App origin; set `LILY_ADMIN_USER_IDS` to a comma-separated list of exact Telegram owner IDs; and set `LILY_API_BASE_URL` in the Mini App server environment to the bridge’s public HTTPS URL. Then register the dashboard URL in BotFather and open Lily from Telegram. Browser testing outside Telegram correctly displays an authentication-required state; no production bridge URL is included in this repository.
+
+## Durable code-project jobs and managed service supervision
+
+Code-project creation now creates a durable job record with queued, running, completed, cancelled, or failed state; public stage text; artifact name; source-file count; and requester-scoped cancellation. Ask Lily for **“my code projects”** or **“cancel code project `<job-id>`”** to inspect or cancel your own active project jobs.
+
+Lily also includes a constrained service-supervisor interface for registered managed projects. It is disabled by default and accepts only explicit registered slugs on `LILY_ALLOWED_MANAGED_SERVICES`. When enabled on a hardened Ubuntu host, it sends fixed `systemctl --user` and `journalctl --user` argument lists for status, start, stop, restart, and redacted logs. It does not accept shell commands, arbitrary unit names, or cross-owner project control.
+
+## Curated specialist agent roles
+
+Lily has an independently designed catalog of **200-plus** specialist-role cards spanning coordination, engineering, design, product, quality, security, operations, research, analysis, communication, community, content, media, automation, strategy, finance, academic, geospatial, healthcare, and game development. The catalog was informed by a review of the supplied agency-role taxonomies, but Lily’s cards and prompts are independently authored; no external role prompt, installer, or executable workflow is imported.
+
+By default, catalog roles provide deterministic routing and public workflow labels only. To enable a real, bounded LLM specialist review, set `LILY_ENABLE_AGENT_TEAM=true`. Lily first obtains a single central action plan, then selects the relevant primary specialist and a small reviewer group—**three roles total by default**, capped at four. Each selected role receives only a truncated, credential-redacted request and the central action summary. Its structured memo can raise the risk level, require confirmation, or identify missing information; it cannot change the action, edit action arguments, add tools, call external services, bypass permissions, or reduce safety requirements. Lily then reconstructs and safety-enforces the one accountable central plan before the existing permission and confirmation path is reached.
+
+```env
+LILY_ENABLE_AGENT_TEAM=true
+LILY_AGENT_TEAM_MAX_ROLES=3
+LILY_AGENT_TEAM_TIMEOUT=20
+```
+
+The team feature uses the existing configured structured-output model router, provider privacy filtering, health checks, cooldowns, and fallback order. If specialist calls are unavailable or fail, Lily safely retains the original central plan rather than retrying indefinitely or expanding the team. Telegram shows a compact public status such as “bounded specialist review complete”; it does not show individual memo text, chain-of-thought, raw prompts, credentials, model responses, or command details. Use `./commands/ubuntu-sandbox.sh team "<request>"` for a **non-executing** local team-preview report. Ask **“Lily, show agent roles”** for a safe Telegram division summary, run `./commands/ubuntu-sandbox.sh roles` for the full local catalog, or use `./commands/ubuntu-sandbox.sh roles --division engineering` for a focused view.
+
+## Agency orchestration upgrades (v2)
+
+Lily now includes NEXUS-inspired workflows drawn from modern multi-agent agency patterns:
+
+| Feature | How to use it |
+|---|---|
+| **Scenario runbooks** | `Lily, list scenarios` or `Lily, start scenario startup-mvp` |
+| **Handoff cards** | `Lily, show handoff` after any planned action |
+| **RAG knowledge routing** | Automatic — Lily routes requests to bundled operating skills |
+| **Deep research** | `Lily, deep research: <question>` — parallel scout waves with citations |
+| **RAG diagnostics** | `/ragdebug` or `Lily, diagnose knowledge` |
+| **Ops briefing** | `/briefing` (admin) — queue health and open reports |
+| **Structured intake** | `Lily, moderation intake: …` or `deployment intake: …` |
+| **Dev↔QA loop** | Automatic on code projects when `LILY_ENABLE_QA_LOOP=true` |
+
+Five built-in scenarios ship today: **Startup MVP**, **Incident Response**, **Content Launch**, **Community Growth**, and **Deep Research Mission**. Each shows phased goals, deliverables, and specialist role rosters without granting new tools.
+
+```env
+LILY_ENABLE_SCENARIO_RUNBOOKS=true
+LILY_ENABLE_RAG_ROUTING=true
+LILY_ENABLE_DEEP_RESEARCH=true
+LILY_DEEP_RESEARCH_SCOUTS=3
+LILY_ENABLE_QA_LOOP=true
+```
+
+## Free API lookups (no keys required)
+
+Lily ships **20 built-in public API tools** that work without extra credentials. Ask in natural language or use `/tools` for the catalog.
+
+| Category | Examples |
+|---|---|
+| **Weather & time** | `Lily weather in Paris`, `Lily time in Tokyo` |
+| **Money & markets** | `Lily bitcoin price`, `Lily convert 100 USD to EUR` |
+| **Knowledge** | `Lily wiki Python`, `Lily define serendipity`, `Lily country info Japan` |
+| **Media & fun** | `Lily anime search Frieren`, `Lily tell me a joke`, `Lily cat fact`, `Lily nasa apod` |
+| **Developer** | `Lily github torvalds/linux`, `Lily hacker news top`, `Lily ip lookup 8.8.8.8` |
+| **Utility** | `Lily shorten https://…`, `Lily qr code for https://…`, `Lily translate hello to Spanish` |
+
+```env
+LILY_ENABLE_FREE_TOOLS=true
+LILY_FREE_API_TIMEOUT=20
+```
+
+Results are bounded, attributed to their provider, and returned as a single compact reply (with tg-thinking draft preview when enabled). Disable the feature entirely with `LILY_ENABLE_FREE_TOOLS=false`.
+
+## Recommended next advanced features
+
+| Feature | Why it matters |
+|---|---|
+| Admin review inbox | Gives every filter hit, report, and AI recommendation one consistent approval place. |
+| Human moderation handoff | Lets Lily create a structured case file with context when it is uncertain rather than guessing. |
+| Per-skill budget policies | Limits expensive generation, search, and media jobs by group, role, day, and month. |
+| Semantic memory search | Retrieves prior rules, decisions, and post drafts by meaning, not only keywords. |
+| Channel calendar | Schedules post drafts, approval windows, and recurring reports in one timeline. |
+| Media library | Indexes Lily-generated links and uploaded content with expiration, access, and retention controls. |
+
+## Custom skill plugins
+
+Trusted local plugins live in the `plugins/` directory. Each plugin defines a `PLUGIN` manifest with a name, version, description, trigger list, an allow-listed Lily action, risk level, and optional `build_plan(context)` function. A plugin receives text and IDs, not a Telegram Bot object, so all Telegram operations still pass through Lily’s permission and confirmation layer. The included `plugins/hello_skill.py` is a safe example. Do not load untrusted plugin files; Python plugins can execute arbitrary code by design.
+
+## Automatic custom skills
+
+Database-backed custom skills can react to message keywords or explicitly supplied regular expressions. Each skill has an enabled state, priority, bounded cooldown, and execution mode. The default **suggest** mode displays a confirmation-required plan. Only the fixed safe reply action (`plugin_reply`) may use **auto** mode with `confirmation: never`. Moderation, media, downloads, code workspaces, group configuration, and channel publishing remain approval-gated even if a skill is accidentally configured for automatic operation.
+
+Lily records a compact lifecycle record for every selected automatic skill: awaiting confirmation, approved, completed, cancelled, denied, failed, or needs-details. It stores public action names and short status labels only—not model reasoning, source-file metadata, environment values, or raw command strings. Ask `Lily, skill status` to see recent automatic-skill activity in the current chat.
+
+## Channel Post Studio
+
+An admin can say `Lily, create an anime episode announcement`. Lily asks what kind of post to create, asks for the destination channel ID or username, verifies that the requester is authorized and that Lily is an administrator with posting permission, looks up public anime metadata from AniList, renders the announcement with rich text and an expandable synopsis, shows a preview, and asks for final publication confirmation. The template includes primary-style RichMessage buttons. Lily stores the last published message ID per channel so an admin can later say `Lily, delete the last post in this channel`; deletion is also confirmed before execution.
+
+## Start Lily
+
+```bash
+cd /home/ubuntu/lily
+. .venv/bin/activate
+set -a && . ./.env && set +a
+python -m lily.main
+```
+
+For production, run Lily under a supervisor such as systemd or another process manager with automatic restart. Long polling is convenient for development. A webhook endpoint can be added later if the deployment exposes HTTPS.
+
+## Large file workflow
+
+When a user replies to a file and asks Lily to rename, compress, or encode it, Lily downloads it through the configured Bot API file endpoint, checks the configured limits, records byte usage, processes it in the work directory, uploads the result, and removes temporary files. The job semaphore limits concurrent transformations. Ensure the host has enough free disk for both the input and output; compression and transcoding can require more than twice the source-file size.
+
+## Natural-language examples
+
+```text
+Lily, rename this file to My Movie - 2026 - 1080p.
+Lily, compress this archive and send it back.
+Lily, encode this video to H.264 MP4.
+Lily, create a PDF report from this text.
+Lily, ban this user for repeated scam links.
+Lily, restrict user 123456789 to text only for one hour.
+Lily, set the welcome message to Read the rules, {user}.
+Lily, enable member verification for new members.
+Lily, lock this group.
+Lily, unlock this group.
+Lily, create invite link named weekend for 20 members expires 24 hours.
+Lily, revoke invite link https://t.me/+exampleInvite.
+Lily, create forum topic called Releases.
+Lily, close this topic.
+Lily, show admins.
+Lily, how many members are here?
+Lily, group announcement: The maintenance window begins at 8 PM.
+Lily, create checklist: Release tasks | Run tests | Review logs.
+Lily, clear all pins.
+Lily, set group sticker set to team_stickers.
+Lily, remove group sticker set.
+Lily, add a case note for report 7 saying review a repeated violation.
+Lily, create a skill: when someone says “drop the link”, ask an admin before deleting the message.
+Lily, register bot manga-bot from https://github.com/example/manga-bot with python-main entrypoint bot.py.
+Lily, show custom run command options.
+Lily, provision bot manga-bot.
+Lily, track manhwa Solo Leveling at chapter 210.
+Lily, list tracked series.
+Lily, update Solo Leveling to chapter 211.
+Lily, weather in Berlin.
+Lily, bitcoin price.
+Lily, wiki artificial intelligence.
+Lily, tell me a joke.
+Lily, nasa apod.
+Lily, country info Brazil.
+Lily, qr code for https://example.com/event.
+```
+
+The user should reply directly to a target message or file when Lily needs an unambiguous target. This prevents the AI from guessing which member or file the user meant.
+
+## Series release tracker
+
+Lily includes an admin-managed **manual release tracker** for manga, manhwa, and manhua titles. It can normalize titles, record a known chapter, list active tracked series, preserve an audit trail, and help prepare a channel announcement from confirmed information. The tracker intentionally does not scrape third-party sites, mirror protected chapter pages, or download copyrighted chapter files. Those activities need separate rights, source agreements, and compliance review.
+
+## Security checklist
+
+Use a separate bot token for development, set restrictive filesystem permissions on `data`, `work`, and `downloads`, configure disk quotas, keep the Bot API server private, run the process as a non-root user, and review audit logs. Do not enable direct audio downloads without an allow-list. Do not let custom skills contain arbitrary shell commands; skills are restricted to named backend actions.
+
+## Managed bot registry and environment wizard
+
+Lily includes a **managed-project foundation** for operators who want to run approved bot repositories from one controlled host. It stores the project slug, HTTPS GitHub repository, branch, runtime, fixed run profile, target entrypoint or module, isolated project root, host-only environment path, owner, status, revision, and errors in SQLite. The current supported runtime options are `python-main`, `python-module`, `node-start`, and `docker-compose-up`; Lily does not accept an arbitrary command pasted into chat.
+
+The environment wizard parses a project’s `.env.example`, recognizes likely secret names, validates common URL, integer, and boolean values, and writes a generated host-only `.env` by atomic replacement with mode `0600`. It provides only a redacted status view, so tokens and passwords never appear in audit logs or chat replies. Secret collection must occur through a private authenticated surface, not in a group chat.
+
+Set `LILY_ALLOWED_PROJECT_REPOSITORIES` to a comma-separated exact HTTPS GitHub allow-list before registering projects. `LILY_BOT_FACTORY_DRY_RUN=true` is the default and ensures that a provision request displays the exact fixed clone, install, and run plan without changing the host. Set it to `false` only after the always-on host, test bot, service supervisor, storage, and secret handling are verified. In active mode, Python projects can install from `requirements.txt` with `python -m pip install --no-input -r requirements.txt` or from `pyproject.toml`; Node and Docker Compose projects use fixed reviewed plans. Dependency installation can run third-party code, so a repository approval and confirmation remain mandatory.
+
+## Curated operating skills and multi-step execution
+
+Lily includes a version-controlled project-knowledge library in `lily/knowledge/`. It provides focused `SKILL.md` playbooks for agent workflow, moderation, media, channels, model routing, bot operations, deployment, and Mini App integration. These guides define safe procedures for named Python actions; they do not grant models arbitrary shell commands, unrestricted filesystem access, or the ability to add tools dynamically.
+
+For every named action, Lily can show a concise, user-visible sequence: understand the request, validate permissions and capability gates, check the relevant file/source/repository conditions, obtain confirmation when required, execute the approved action, audit the outcome, and report the result. This gives users useful progress without disclosing private model reasoning or secrets. Ask `Lily, show operating skills` to view the available protocols, or `Lily, show tool status` to see which host-gated features are currently enabled.
+
+Lily now applies a deterministic safety layer after both AI and heuristic planning. A provider cannot lower a destructive action’s risk or suppress its confirmation requirement. Member-targeting actions require an explicit numeric ID or direct reply. This hardening removes dead action routes for unconfigured reminders and fake task extraction; a normal summary request is handled as an AI response only, without claiming a separate automation job was created.
+
+The current concrete admin and assistant actions include **member profile lookup**, **group-title changes**, **group-description changes**, **quoted-message explanation**, and **scoped deletion of the requester’s latest saved memory**. Group metadata changes and memory deletion retain confirmations and audits. The member lookup is read-only but remains administrator-only to avoid turning Lily into a member-enumeration tool.
+
+## MangaDex metadata and release feed
+
+Lily includes an **official MangaDex metadata-only** client. It is disabled by default. To enable it, set a truthful user agent and a conservative request interval; Lily caches repeated requests and never calls reader, image, MangaDex@Home, or chapter-download endpoints.
+
+```env
+LILY_ENABLE_MANGADEX_METADATA=true
+LILY_MANGADEX_USER_AGENT="Lily/1.0 (your-contact@example.com)"
+LILY_MANGADEX_MIN_INTERVAL_SECONDS=0.30
+LILY_MANGADEX_CACHE_SECONDS=300
+```
+
+Use `Lily, MangaDex search for Frieren` to search title metadata, or `Lily, show MangaDex recent chapters for <MangaDex title ID>` to view a release feed. Lily attributes results to MangaDex and displays group attribution metadata when available; it does not provide a chapter reader or content-download feature. MangaPill remains manual-link-only because Lily has no verified authorized public API integration for it.
+
+## Telegram Bot API 10.3 delivery and local CLI
+
+Lily uses native Rich Messages whenever the deployed Bot API supports them and falls back gracefully for older deployments. Bot API 10.3 draft streaming is supported through:
+
+- **`sendRichMessageDraft`** — structured status cards with optional thinking blocks and execution stages
+- **`sendMessageDraft`** — lightweight text draft fallback when rich drafts are unavailable
+
+Live drafts show only public status (validating, thinking, awaiting confirmation, delivering). They never expose hidden model reasoning, prompts, or credentials. With `LILY_COMPACT_RESPONSES=true` (default), Lily avoids spamming the chat with duplicate progress messages — drafts update in place and only the final answer or result is posted. Users can stop generation when the Bot API supports `can_stop`.
+
+```env
+LILY_RICH_LIVE_PREVIEWS=true
+LILY_ENABLE_MESSAGE_DRAFTS=true
+LILY_ENABLE_AI_THINKING=true
+LILY_COMPACT_RESPONSES=true
+LILY_AI_THINKING_BUDGET=1024
+```
+
+Telegram’s standard `sendMessage` text is limited to 4,096 characters after entities parsing, so Lily safely splits long answers into numbered pages below that limit.
+
+The `commands/` directory contains safe host-operator scripts:
+
+```bash
+./commands/check.sh                 # compile and run all tests
+./commands/cli.sh chat              # interactive multi-mode CLI
+./commands/cli.sh doctor            # redacted local health/config status
+./commands/cli.sh route "Lily wiki Python"  # heuristic routing without LLM
+./commands/cli.sh tools catalog     # list free no-key API tools
+./commands/cli.sh run-profiles      # fixed approved managed-bot profiles
+./commands/cli.sh preview "Lily set group title to Anime Club"  # preview only; does not execute
+./commands/ubuntu-sandbox.sh team "Create a Python API project with tests"  # optional bounded team review; never executes
+./commands/ubuntu-sandbox.sh roles  # curated specialist role catalog
+./commands/ubuntu-sandbox.sh service status <slug> --owner <id>  # disabled unless explicitly enabled
+./commands/run-bot.sh               # start Telegram worker locally
+./commands/run-api.sh               # start standalone FastAPI service locally
+```
+
+These scripts are intentionally for the server operator only; they do not create a generic shell tool in Telegram. The detailed current API capability protocol lives at `lily/knowledge/telegram-api/SKILL.md`.
+
+## References
+
+[1]: [Telegram Bot API reference](https://core.telegram.org/bots/api)
+[2]: [Telegram Mini Apps: validating init data](https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app)
+[3]: [Telegram Bot API changelog](https://core.telegram.org/bots/api-changelog)
+[4]: [python-telegram-bot documentation](https://docs.python-telegram-bot.org/)
+[5]: [python-telegram-bot Rich Messages tracking issue](https://github.com/python-telegram-bot/python-telegram-bot/issues/5261)
+
+---
+
+Built with [BrainDaemon](https://braindaemon.com)
