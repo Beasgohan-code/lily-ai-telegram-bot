@@ -363,9 +363,26 @@ The `commands/` directory contains safe host-operator scripts:
 
 These scripts are intentionally for the server operator only; they do not create a generic shell tool in Telegram. The detailed current API capability protocol lives at `lily/knowledge/telegram-api/SKILL.md`.
 
-## References
+## Provider observability
 
-[1]: [Telegram Bot API reference](https://core.telegram.org/bots/api)
+Lily records aggregate per-model metrics so operators can see health, latency, and token cost without exposing any private content. The router classifies provider failures into coarse buckets (`rate_limit`, `auth`, `timeout`, `server`, `malformed`, `network`, `other`) and captures prompt/completion token totals when the provider returns them. These in-memory aggregates are flushed to SQLite on a bounded cadence and cleared afterward, so **no prompt, completion, chat content, secret, or provider response is ever persisted**.
+
+```env
+LILY_OBSERVABILITY_ENABLED=true
+LILY_OBSERVABILITY_FLUSH_SECONDS=60
+```
+
+Ask **`Lily, model status`** (or `/models`) in chat for a live provider table, or run `./commands/cli.sh doctor` for a redacted snapshot that includes `provider_requests`, `provider_successes`, `provider_failures`, and `provider_tokens`. The persisted rows live in `provider_telemetry` and are intended for dashboards and trends, not raw message logs.
+
+## Moderation inbox in the ops briefing
+
+The admin **ops briefing** (`/briefing` or `Lily, ops briefing`) is now a single redacted view of the group's moderation workload: open reports, pending member verifications, unresolved warning counts, encoding-queue health, and AI provider health. It surfaces counts and identifiers only — never report reasons, reporter/target IDs, private case notes, or provider errors. Admin-only.
+
+```
+Lily, ops briefing
+# or
+/briefing
+```
 [2]: [Telegram Mini Apps: validating init data](https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app)
 [3]: [Telegram Bot API changelog](https://core.telegram.org/bots/api-changelog)
 [4]: [python-telegram-bot documentation](https://docs.python-telegram-bot.org/)

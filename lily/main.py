@@ -10,6 +10,7 @@ from .config import settings
 from .db import db
 from .handlers import help_message, register_handlers, start
 from .queue_manager import encoding_queue
+from .observability import build_observability
 from .rich import rich
 from .web_media import stream_links
 from .agent import ai
@@ -44,6 +45,9 @@ async def help_handler(update: Update, context) -> None:
 
 async def post_shutdown(application: Application) -> None:
     await encoding_queue.stop()
+    obs = application.bot_data.pop("observability_service", None)
+    if obs:
+        await obs.stop()
     await ai.aclose()
     await rich.aclose()
     task = application.bot_data.pop("stream_server_task", None)
@@ -54,6 +58,9 @@ async def post_shutdown(application: Application) -> None:
 
 async def post_init(application: Application) -> None:
     await db.init()
+    obs = build_observability(ai.router_instance)
+    obs.start()
+    application.bot_data["observability_service"] = obs
     if settings.stream_public_base_url and settings.stream_embedded:
         try:
             import uvicorn

@@ -915,10 +915,17 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
     if action == "plugin_reply":
         return str(plan.args.get("text") or plan.summary)[:3500]
     if action == "model_status":
-        statuses = await ai.status()
-        if not statuses:
-            return "No AI model profiles are configured."
-        return "\n".join(f"• {item['name']} / {item['model']} — {'available' if item['available'] else 'cooling down'}; successes={item['successes']}; failures={item['failures']}" for item in statuses)
+        from .observability import build_observability
+        obs = build_observability(ai.router_instance)
+        report = await obs.report(limit=50)
+        blocks = [heading("AI model health", 2)]
+        for profile in report["profiles"]:
+            blocks.append(paragraph(f"**{profile['name']}** / `{profile['model']}` — {'available' if profile['available'] else 'cooling down'}; ok={profile['successes']}; fail={profile['failures']}; tokens={profile['total_tokens']}; last={profile['last_latency_ms']}ms"))
+        if not report["profiles"]:
+            blocks.append(paragraph("No AI provider profiles are configured."))
+        blocks.append(paragraph(f"_\u200bAggregate: {report['total_requests']} requests (history={report['history_count']}), {report['total_tokens']} tokens._"))
+        await rich.send(chat_id, blocks)
+        return f"Reported {len(report['profiles'])} AI provider(s)."
     if action == "queue_status":
         job_id = str(plan.args.get("job_id") or "")
         item = await encoding_queue.status(job_id, user_id)
@@ -1226,9 +1233,19 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
     if action == "admin_briefing":
         if user_id not in settings.admin_user_ids and update.effective_chat.type != "private":
             raise PermissionError("Only Lily administrators can request an operations briefing.")
-        briefing = await build_briefing(db, chat_id)
-        await rich.send(chat_id, [heading("Operations briefing", 2), paragraph(briefing["text"])])
-        return "Generated the operations briefing."
+        from .observability import build_observability
+        obs = build_observability(ai.router_instance)
+        briefing = await build_briefing(db, chat_id, moderation=moderation, observability=obs)
+        blocks = [heading("Operations briefing", 2), paragraph(briefing["text"])]
+        if chat_id in settings.admin_user_ids or update.effective_chat.type == "private":
+            try:
+                pending = await moderation.pending_verifications(chat_id)
+                if pending:
+                    blocks.append(paragraph(f"Pending verifications: {', '.join(str(item['user_id']) for item in pending[:8])}"))
+            except Exception:
+                pass
+        await rich.send(chat_id, blocks)
+        return "Generated the operations briefing with the moderation inbox."
     if action == "start_intake":
         kind = str(plan.args.get("kind") or "research")
         packet = create_intake(kind, str(plan.args.get("text") or plan.summary), user_id, chat_id, _reply_context(update))

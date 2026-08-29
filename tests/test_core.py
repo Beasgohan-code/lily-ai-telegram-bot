@@ -1363,6 +1363,100 @@ class LilyCoreTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_provider_observability_persists_redacted_aggregates(self):
+        from lily.model_router import ModelRouter, ModelProfile
+        from lily.observability import build_observability
+
+        async def run():
+            with tempfile.TemporaryDirectory() as directory:
+                database = Database(str(Path(directory) / "obs.sqlite3"))
+                await database.init()
+                router = ModelRouter([ModelProfile("free", "https://free.test/v1", "key", "free", "openai", frozenset({"chat", "structured"}))])
+                obs = build_observability(router, database, enabled=True, flush_seconds=10)
+
+                # Simulate a successful call with usage, then a rate-limit failure.
+                state = router.health[router.profiles[0].key_id]
+                await router._mark_success(router.profiles[0], 42.0, {"usage": {"prompt_tokens": 100, "completion_tokens": 50}})
+                await router._mark_failure(router.profiles[0], RuntimeError("HTTP 429 rate limited"))
+                await router._mark_failure(router.profiles[0], RuntimeError("connection reset"))
+
+                flushed = await obs.flush()
+                self.assertEqual(flushed, 1)
+                history = await database.latest_provider_telemetry()
+                self.assertEqual(len(history), 1)
+                row = history[0]
+                self.assertEqual(row["name"], "free")
+                self.assertEqual(row["successes"], 1)
+                self.assertEqual(row["failures"], 2)
+                self.assertEqual(row["prompt_tokens"], 100)
+                self.assertEqual(row["completion_tokens"], 50)
+                # Rate limit + network errors are bucketed, never exposing raw messages.
+                self.assertEqual(row["error_classes"].get("rate_limit"), 1)
+                self.assertEqual(row["error_classes"].get("network"), 1)
+                # After flush, in-memory aggregates are reset.
+                state = router.health[router.profiles[0].key_id]
+                self.assertEqual(state.total_tokens, 0)
+                self.assertEqual(state.error_counts, {})
+                # Report is redacted (aggregate token counters are fine; raw secrets are not).
+                report = await obs.report()
+                self.assertIn("profiles", report)
+                serialized = json.dumps(report).lower()
+                self.assertNotIn("bearer", serialized)
+                self.assertNotIn("api_key", serialized)
+                self.assertNotIn("authorization", serialized)
+
+        asyncio.run(run())
+
+    def test_model_status_report_is_redacted_and_bounded(self):
+        from lily.model_router import ModelRouter, ModelProfile
+        from lily.observability import build_observability
+
+        async def run():
+            with tempfile.TemporaryDirectory() as directory:
+                database = Database(str(Path(directory) / "status.sqlite3"))
+                await database.init()
+                router = ModelRouter([ModelProfile("m", "https://e.test", "key", "gpt-test", "openai", frozenset({"chat", "structured"}))])
+                obs = build_observability(router, database, enabled=False)
+                report = await obs.report()
+                self.assertEqual(len(report["profiles"]), 1)
+                self.assertEqual(report["profiles"][0]["name"], "m")
+                serialized = json.dumps(report)
+                self.assertNotIn("Bearer", serialized)
+                self.assertNotIn("key", serialized)
+                self.assertIn("total_tokens", serialized)
+
+        asyncio.run(run())
+
+    def test_briefing_includes_redacted_moderation_inbox(self):
+        from lily.briefing_digest import build_briefing
+
+        class FakeDb:
+            async def list_encoding_jobs(self, chat_id, limit=50):
+                return []
+            async def list_reports(self, chat_id, status="open", limit=20):
+                return [{"id": 1}, {"id": 2}]
+
+        class FakeModeration:
+            async def pending_verifications(self, chat_id):
+                return [{"user_id": 123}, {"user_id": 456}]
+            async def warnings_pending(self, chat_id):
+                return [{"user_id": 789, "warning_count": 3}]
+
+        class FakeObs:
+            async def report(self, limit=50):
+                return {"total_requests": 5, "total_successes": 4, "total_failures": 1, "total_tokens": 900, "history_count": 1, "profiles": []}
+
+        async def run():
+            digest = await build_briefing(FakeDb(), -1001, moderation=FakeModeration(), observability=FakeObs())
+            self.assertEqual(digest["open_reports"], 2)
+            self.assertEqual(digest["pending_verifications"], 2)
+            self.assertEqual(digest["warnings_pending"], 1)
+            self.assertIn("AI health", digest["text"])
+            # No private reason/note content leaks into the digest.
+            self.assertNotIn("secret", digest["text"].lower())
+
+        asyncio.run(run())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -175,6 +175,10 @@ class AIClient:
         """Release the shared AI connection pool during shutdown."""
         await self.router.aclose()
 
+    @property
+    def router_instance(self) -> ModelRouter:
+        return self.router
+
     async def _request(self, payload: dict[str, Any], requirement: str = "chat") -> dict[str, Any]:
         request = {**payload, "_allow_public_fallback": settings.allow_public_ai_fallbacks}
         data, _profile = await self.router.chat(request, requirement=requirement)

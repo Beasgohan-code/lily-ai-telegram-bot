@@ -33,10 +33,18 @@ class Health:
     cooldown_until: float = 0.0
     last_error: str = ""
     last_latency_ms: float = 0.0
+    # Observability aggregates (in-memory cumulative since process start).
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    error_counts: dict[str, int] = field(default_factory=dict)
 
     @property
     def available(self) -> bool:
         return time.monotonic() >= self.cooldown_until
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
 
 
 class ModelRouter:
@@ -135,20 +143,57 @@ class ModelRouter:
         # Token fields were normalized before reasoning so family-specific limits remain valid.
         return request
 
+    @staticmethod
+    def _classify_error(error: Exception) -> str:
+        """Classify a provider error into a coarse, aggregate-safe bucket."""
+        message = str(error).lower()
+        if "http 429" in message or "rate limit" in message or "quota" in message or "too many" in message:
+            return "rate_limit"
+        if "http 401" in message or "http 403" in message or "unauthorized" in message or "api key" in message or "authentication" in message or "invalid key" in message:
+            return "auth"
+        if isinstance(error, httpx.TimeoutException) or "timeout" in message or "timed out" in message:
+            return "timeout"
+        if "http 5" in message or "500" in message or "502" in message or "503" in message or "504" in message or "server" in message or "bad gateway" in message or "service unavailable" in message:
+            return "server"
+        if "404" in message or "not found" in message or "json" in message or "invalid-json" in message or "malformed" in message or "decode" in message:
+            return "malformed"
+        if isinstance(error, httpx.NetworkError) or "connect" in message or "connection" in message:
+            return "network"
+        return "other"
+
+    @staticmethod
+    def _token_usage(data: dict[str, Any]) -> tuple[int, int]:
+        """Pull prompt/completion token counts from a provider response, if present."""
+        usage = data.get("usage") or {}
+        if not isinstance(usage, dict):
+            return 0, 0
+        prompt = int(usage.get("prompt_tokens", 0) or 0)
+        completion = int(usage.get("completion_tokens", 0) or 0)
+        if not prompt and not completion:
+            prompt = int(usage.get("input_tokens", 0) or 0)
+            completion = int(usage.get("output_tokens", 0) or 0)
+        return prompt, completion
+
     async def _mark_failure(self, profile: ModelProfile, error: Exception) -> None:
         state = self.health[profile.key_id]
         state.failures += 1
+        error_class = self._classify_error(error)
+        state.error_counts[error_class] = state.error_counts.get(error_class, 0) + 1
         state.last_error = str(error)[:300]
         delay = min(self.cooldown_max, self.cooldown_base * (2 ** min(state.failures - 1, 6)))
         state.cooldown_until = time.monotonic() + delay
 
-    async def _mark_success(self, profile: ModelProfile, latency_ms: float) -> None:
+    async def _mark_success(self, profile: ModelProfile, latency_ms: float, data: dict[str, Any] | None = None) -> None:
         state = self.health[profile.key_id]
         state.successes += 1
         state.failures = 0
         state.cooldown_until = 0.0
         state.last_error = ""
         state.last_latency_ms = latency_ms
+        if data is not None:
+            prompt, completion = self._token_usage(data)
+            state.prompt_tokens += prompt
+            state.completion_tokens += completion
 
     @staticmethod
     def _plain_messages(messages: list[dict[str, Any]]) -> str:
@@ -230,7 +275,7 @@ class ModelRouter:
                             raise RuntimeError(f"{profile.key_id} returned HTTP {response.status_code}")
                         response.raise_for_status()
                         data = self._normalize_response(profile, response.json())
-                        await self._mark_success(profile, (time.perf_counter() - started) * 1000)
+                        await self._mark_success(profile, (time.perf_counter() - started) * 1000, data)
                         return data, profile
                     except Exception as exc:
                         last_error = exc
@@ -249,5 +294,32 @@ class ModelRouter:
         async with self._lock:
             for profile in self.profiles:
                 state = self.health[profile.key_id]
-                result.append({"name": profile.name, "model": profile.model, "family": profile.family, "privacy_tier": profile.privacy_tier, "capabilities": sorted(profile.capabilities), "priority": profile.priority, "available": state.available, "in_flight": state.in_flight, "failures": state.failures, "successes": state.successes, "last_error": state.last_error, "last_latency_ms": round(state.last_latency_ms, 1)})
+                result.append({"name": profile.name, "model": profile.model, "family": profile.family, "privacy_tier": profile.privacy_tier, "capabilities": sorted(profile.capabilities), "priority": profile.priority, "available": state.available, "in_flight": state.in_flight, "failures": state.failures, "successes": state.successes, "last_error": state.last_error, "last_latency_ms": round(state.last_latency_ms, 1), "prompt_tokens": state.prompt_tokens, "completion_tokens": state.completion_tokens, "total_tokens": state.total_tokens, "error_classes": dict(state.error_counts)})
         return result
+
+    async def telemetry(self) -> list[dict[str, Any]]:
+        """Return per-profile aggregate metrics for persistence (no prompts/secrets)."""
+        result = []
+        async with self._lock:
+            for profile in self.profiles:
+                state = self.health[profile.key_id]
+                result.append({
+                    "name": profile.name,
+                    "model": profile.model,
+                    "family": profile.family,
+                    "privacy_tier": profile.privacy_tier,
+                    "successes": state.successes,
+                    "failures": state.failures,
+                    "prompt_tokens": state.prompt_tokens,
+                    "completion_tokens": state.completion_tokens,
+                    "error_classes": dict(state.error_counts),
+                })
+        return result
+
+    async def reset_telemetry(self) -> None:
+        """Zero the in-memory provider aggregates after they are flushed to storage."""
+        async with self._lock:
+            for state in self.health.values():
+                state.prompt_tokens = 0
+                state.completion_tokens = 0
+                state.error_counts = dict()
