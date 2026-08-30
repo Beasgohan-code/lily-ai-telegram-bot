@@ -226,5 +226,15 @@ class ModerationService:
         text = template.replace("{user}", name).replace("{group}", update.effective_chat.title or "this group")
         await rich.send(update.effective_chat.id, [heading("Goodbye", 3), paragraph(text)])
 
+    async def pending_verifications(self, chat_id: int) -> list[dict[str, Any]]:
+        """Return redacted pending member verifications (no user identities)."""
+        rows = await db.list_pending_verifications(chat_id, limit=50)
+        return [{"user_id": row["user_id"], "joined_at": row.get("joined_at")} for row in rows]
+
+    async def warnings_pending(self, chat_id: int) -> list[dict[str, Any]]:
+        """Return members with at least one unresolved warning (aggregated)."""
+        rows = await db.list_warnings_pending(chat_id, limit=50)
+        return rows
+
 
 moderation = ModerationService()

@@ -523,6 +523,19 @@ class RichClient:
         self._draft_ids = itertools.count(1001)
         self._rich_draft_supported: bool | None = None
         self._message_draft_supported: bool | None = None
+        self._client: httpx.AsyncClient | None = None
+
+    def _http(self) -> httpx.AsyncClient:
+        """Return a shared, connection-pooled AsyncClient for Bot API calls."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=self.timeout, limits=httpx.Limits(max_connections=32, max_keepalive_connections=16))
+        return self._client
+
+    async def aclose(self) -> None:
+        """Release the shared Bot API connection pool during shutdown."""
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
     def normalize_draft_id(self, draft_id: int | str | None = None) -> int:
         if draft_id is None:
@@ -535,10 +548,9 @@ class RichClient:
         if not self.token:
             raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured")
         url = f"{self.base}{self.token}/{method}"
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
-            data = response.json()
+        response = await self._http().post(url, json=payload)
+        response.raise_for_status()
+        data = response.json()
         if not data.get("ok"):
             raise RuntimeError(f"Telegram {method} failed: {data.get('description', data)}")
         return data.get("result", data)

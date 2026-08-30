@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from dataclasses import dataclass, field
@@ -30,7 +31,7 @@ ACTIONS = {
     "show_operating_skills",
     "mangadex_search", "mangadex_feed",
     "member_profile", "set_chat_title", "set_chat_description", "set_group_default_permissions", "create_invite_link", "revoke_invite_link", "create_forum_topic", "close_forum_topic", "reopen_forum_topic", "delete_forum_topic", "list_administrators", "group_member_count", "send_group_announcement", "post_checklist", "unpin_all_messages", "set_chat_sticker_set", "delete_chat_sticker_set", "show_identifiers",
-    "list_scenarios", "run_scenario", "show_handoff", "deep_research", "rag_debug", "admin_briefing", "start_intake", "show_intake",
+    "list_scenarios", "run_scenario", "show_handoff", "deep_research", "rag_debug", "admin_briefing", "moderation_inbox", "start_intake", "show_intake",
     "weather_lookup", "crypto_price", "exchange_rate", "wikipedia_search", "define_word", "anime_search", "github_repo",
     "world_time", "daily_quote", "hackernews_feed", "shorten_url", "random_fact", "translate_text", "free_tools_catalog",
     "dad_joke", "number_fact", "ip_lookup", "qr_code", "nasa_apod", "cat_fact", "country_info",
@@ -170,6 +171,14 @@ class AIClient:
     async def status(self) -> list[dict[str, Any]]:
         return await self.router.status()
 
+    async def aclose(self) -> None:
+        """Release the shared AI connection pool during shutdown."""
+        await self.router.aclose()
+
+    @property
+    def router_instance(self) -> ModelRouter:
+        return self.router
+
     async def _request(self, payload: dict[str, Any], requirement: str = "chat") -> dict[str, Any]:
         request = {**payload, "_allow_public_fallback": settings.allow_public_ai_fallbacks}
         data, _profile = await self.router.chat(request, requirement=requirement)
@@ -274,11 +283,10 @@ Identify only user-visible constraints, risk floors, confirmation needs, and mis
         if not settings.enable_agent_team or not self.providers:
             return plan
         roles = self._team_roles(plan, text, settings.agent_team_max_roles)
-        memos: list[AgentTeamMemo] = []
-        for role in roles:
-            memo = await self._role_memo(role, text, plan)
-            if memo:
-                memos.append(memo)
+        # Role reviews are independent LLM calls; run them concurrently so bounded
+        # approval latency is the slowest memo, not the sum of all of them.
+        results = await asyncio.gather(*(self._role_memo(role, text, plan) for role in roles))
+        memos = [memo for memo in results if memo]
         if not memos:
             return plan
         from .agent_team import merge_role_reviews
@@ -368,10 +376,12 @@ Recent memory: {json.dumps(memories, ensure_ascii=False)}
                 return Plan(intent="run_scenario", summary=f"Activate scenario {slug or 'runbook'}", action="run_scenario", risk="safe", args={"scenario": slug, "phase": 0}, missing=[] if slug else ["Name a scenario such as startup-mvp or incident-response"], confidence=0.9)
             if any(phrase in low for phrase in ("show handoff", "handoff card", "handoff status")):
                 return Plan(intent="show_handoff", summary="Show the current plan handoff card", action="show_handoff", risk="safe", confidence=0.95)
-        if any(phrase in low for phrase in ("ops briefing", "admin briefing", "operations briefing", "daily briefing")):
+        if any(phrase in low for phrase in ("/briefing",)) or any(phrase in low for phrase in ("ops briefing", "admin briefing", "operations briefing", "daily briefing")):
             return Plan(intent="admin_briefing", summary="Generate an operations briefing", action="admin_briefing", risk="safe", confidence=0.95)
         if any(phrase in low for phrase in ("diagnose knowledge", "rag debug", "knowledge debug", "wrong answer")):
             return Plan(intent="rag_debug", summary="Diagnose knowledge routing issues", action="rag_debug", risk="safe", args={"query": value}, confidence=0.9)
+        if any(phrase in low for phrase in ("show inbox", "moderation inbox", "review inbox", "admin inbox", "reports inbox", "inbox")) or low in {"/inbox"}:
+            return Plan(intent="moderation_inbox", summary="Show the admin review inbox", action="moderation_inbox", risk="safe", confidence=0.95)
         from .structured_intake import detect_kind
         intake_kind = detect_kind(value)
         if intake_kind:

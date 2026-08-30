@@ -915,10 +915,17 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
     if action == "plugin_reply":
         return str(plan.args.get("text") or plan.summary)[:3500]
     if action == "model_status":
-        statuses = await ai.status()
-        if not statuses:
-            return "No AI model profiles are configured."
-        return "\n".join(f"• {item['name']} / {item['model']} — {'available' if item['available'] else 'cooling down'}; successes={item['successes']}; failures={item['failures']}" for item in statuses)
+        from .observability import build_observability
+        obs = build_observability(ai.router_instance)
+        report = await obs.report(limit=50)
+        blocks = [heading("AI model health", 2)]
+        for profile in report["profiles"]:
+            blocks.append(paragraph(f"**{profile['name']}** / `{profile['model']}` — {'available' if profile['available'] else 'cooling down'}; ok={profile['successes']}; fail={profile['failures']}; tokens={profile['total_tokens']}; last={profile['last_latency_ms']}ms"))
+        if not report["profiles"]:
+            blocks.append(paragraph("No AI provider profiles are configured."))
+        blocks.append(paragraph(f"_\u200bAggregate: {report['total_requests']} requests (history={report['history_count']}), {report['total_tokens']} tokens._"))
+        await rich.send(chat_id, blocks)
+        return f"Reported {len(report['profiles'])} AI provider(s)."
     if action == "queue_status":
         job_id = str(plan.args.get("job_id") or "")
         item = await encoding_queue.status(job_id, user_id)
@@ -1226,9 +1233,41 @@ async def execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan:
     if action == "admin_briefing":
         if user_id not in settings.admin_user_ids and update.effective_chat.type != "private":
             raise PermissionError("Only Lily administrators can request an operations briefing.")
-        briefing = await build_briefing(db, chat_id)
-        await rich.send(chat_id, [heading("Operations briefing", 2), paragraph(briefing["text"])])
-        return "Generated the operations briefing."
+        from .observability import build_observability
+        obs = build_observability(ai.router_instance)
+        briefing = await build_briefing(db, chat_id, moderation=moderation, observability=obs)
+        blocks = [heading("Operations briefing", 2), paragraph(briefing["text"])]
+        if chat_id in settings.admin_user_ids or update.effective_chat.type == "private":
+            try:
+                pending = await moderation.pending_verifications(chat_id)
+                if pending:
+                    blocks.append(paragraph(f"Pending verifications: {', '.join(str(item['user_id']) for item in pending[:8])}"))
+            except Exception:
+                pass
+        await rich.send(chat_id, blocks)
+        return "Generated the operations briefing with the moderation inbox."
+    if action == "moderation_inbox":
+        if not await is_admin(update):
+            raise PermissionError("Only a group admin can open the moderation inbox.")
+        reports = await db.list_reports(chat_id, status="open", limit=20)
+        pending = await moderation.pending_verifications(chat_id)
+        warnings = await moderation.warnings_pending(chat_id)
+        rows: list[list[str]] = [["Item", "Detail", "Action"]]
+        buttons: list[list[tuple[str, str] | tuple[str, str, str]]] = []
+        if not reports and not pending and not warnings:
+            await rich.send(chat_id, [heading("Moderation inbox", 2), paragraph("Nothing is waiting for review right now.")], reply_to=update.effective_message.message_id if update.effective_message else None)
+            return "The moderation inbox is empty."
+        for item in reports:
+            rows.append(["Report", f"#{item['id']} · target {item.get('target_user_id') or '—'}", "resolve"])
+            buttons.append([("Resolve report", f"inbox:report:{item['id']}:resolve", "primary")])
+        for item in pending:
+            rows.append(["Verification", f"user {item['user_id']} · awaiting approval", "approve"])
+            buttons.append([("Approve join", f"inbox:verify:{item['user_id']}:approve", "primary")])
+        for item in warnings:
+            rows.append(["Warnings", f"user {item['user_id']} · {item['warning_count']}", "clear"])
+            buttons.append([("Clear warnings", f"inbox:warn:{item['user_id']}:clear", "danger")])
+        await rich.send(chat_id, [heading("Moderation inbox", 2), table(rows, compact=True), paragraph("Use the buttons below or the existing confirmation-gated commands in chat. Actions are recorded in the audit log.")], reply_markup=inline_keyboard(buttons), reply_to=update.effective_message.message_id if update.effective_message else None)
+        return f"Opened the moderation inbox: {len(reports)} report(s), {len(pending)} verification(s), {len(warnings)} warning set(s)."
     if action == "start_intake":
         kind = str(plan.args.get("kind") or "research")
         packet = create_intake(kind, str(plan.args.get("text") or plan.summary), user_id, chat_id, _reply_context(update))
@@ -1688,6 +1727,40 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             item = await encoding_queue.status(job_id, update.effective_user.id)
         await query.edit_message_text(text=f"Encoding job `{job_id}`\nState: **{item['state']}**\n{item.get('progress', '')}\n{item.get('error', '')}", parse_mode="Markdown", reply_markup=inline_keyboard([[('Refresh', f'queue:{job_id}:status'), ('Cancel', f'queue:{job_id}:cancel')]]) if item['state'] in {'queued', 'running'} else None)
         return
+    if query.data.startswith("inbox:"):
+        parts = query.data.split(":")
+        if len(parts) != 4:
+            return
+        kind, identifier, action_name = parts[1], parts[2], parts[3]
+        if not await is_admin(update):
+            await query.answer("Only a group admin can manage the moderation inbox.", show_alert=True)
+            return
+        try:
+            target = int(identifier)
+        except ValueError:
+            return
+        if kind == "report" and action_name == "resolve":
+            ok = await db.resolve_report(update.effective_chat.id, target)
+            if ok:
+                await db.audit(update.effective_chat.id, update.effective_user.id, "resolve_report", {"report_id": target})
+            await query.answer("Report resolved." if ok else "That open report was not found.", show_alert=True)
+        elif kind == "verify" and action_name == "approve":
+            ok = await db.complete_verification(update.effective_chat.id, target)
+            if ok:
+                try:
+                    await update.get_bot().restrict_chat_member(update.effective_chat.id, target, permissions=normal_chat_permissions())
+                except Exception:
+                    pass
+                await db.audit(update.effective_chat.id, update.effective_user.id, "member_verified", {"user_id": target, "approved_by": update.effective_user.id})
+            await query.answer("Join request approved." if ok else "That verification is already complete or expired.", show_alert=True)
+        elif kind == "warn" and action_name == "clear":
+            cleared = await db.clear_warnings(update.effective_chat.id, target)
+            await db.audit(update.effective_chat.id, update.effective_user.id, "clear_warnings", {"user_id": target, "cleared": cleared})
+            await query.answer(f"Cleared {cleared} warning(s)." if cleared else "No warnings to clear.", show_alert=True)
+        else:
+            return
+        await query.edit_message_reply_markup(reply_markup=None)
+        return
     if query.data.startswith("verify:"):
         try:
             target = int(query.data.split(":", 1)[1])
@@ -1835,4 +1908,4 @@ def register_handlers(application: Application) -> None:
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_handler), group=-1)
     application.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, goodbye_handler), group=-1)
     application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, on_message), group=0)
-    application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^(confirm:|postpublish$|postcancel$|search:|queue:|verify:)"), group=0)
+    application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^(confirm:|postpublish$|postcancel$|search:|queue:|verify:|inbox:)"), group=0)

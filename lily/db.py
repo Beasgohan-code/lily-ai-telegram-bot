@@ -48,12 +48,18 @@ def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
 class Database:
     def __init__(self, path: str):
         self.path = path
+        self._wal_ready = False
 
     @asynccontextmanager
     async def connect(self):
         db = await aiosqlite.connect(self.path)
         db.row_factory = aiosqlite.Row
-        await db.execute("PRAGMA journal_mode=WAL")
+        # WAL is a persistent database-file setting, so only issue the pragma
+        # once; re-issuing it on every connection adds a round-trip per DB op.
+        if not self._wal_ready:
+            await db.execute("PRAGMA journal_mode=WAL")
+            self._wal_ready = True
+        await db.execute("PRAGMA busy_timeout=5000")
         await db.execute("PRAGMA foreign_keys=ON")
         try:
             yield db
@@ -134,6 +140,19 @@ class Database:
                     event TEXT NOT NULL,
                     detail_json TEXT NOT NULL,
                     created_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS provider_telemetry (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    family TEXT NOT NULL,
+                    privacy_tier TEXT NOT NULL,
+                    successes INTEGER NOT NULL DEFAULT 0,
+                    failures INTEGER NOT NULL DEFAULT 0,
+                    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                    completion_tokens INTEGER NOT NULL DEFAULT 0,
+                    error_classes_json TEXT NOT NULL DEFAULT '{}'
                 );
                 CREATE TABLE IF NOT EXISTS warnings (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -770,6 +789,15 @@ class Database:
             rows = await (await db.execute("SELECT * FROM warnings WHERE chat_id=? AND user_id=? ORDER BY id DESC LIMIT ?", (chat_id, user_id, limit))).fetchall()
             return [dict(row) for row in rows]
 
+    async def list_warnings_pending(self, chat_id: int, limit: int = 50) -> list[dict[str, Any]]:
+        """Return per-user warning counts only, for inbox views (redacted)."""
+        async with self.connect() as db:
+            rows = await (await db.execute(
+                "SELECT user_id, COUNT(*) AS warning_count, MAX(rowid) AS last_warning_id FROM warnings WHERE chat_id=? GROUP BY user_id ORDER BY warning_count DESC LIMIT ?",
+                (chat_id, max(1, min(int(limit), 200))),
+            )).fetchall()
+            return [{"user_id": row["user_id"], "warning_count": row["warning_count"], "last_warning_id": row["last_warning_id"]} for row in rows]
+
     async def set_lock(self, chat_id: int, content_type: str, enabled: bool) -> None:
         async with self.connect() as db:
             await db.execute("INSERT INTO locks(chat_id,content_type,enabled,created_at) VALUES(?,?,?,?) ON CONFLICT(chat_id,content_type) DO UPDATE SET enabled=excluded.enabled", (chat_id, content_type.lower(), int(enabled), int(time.time())))
@@ -880,6 +908,55 @@ class Database:
                 (chat_id, actor_id, event, json.dumps(detail), int(time.time())),
             )
             await db.commit()
+
+    async def record_provider_telemetry(self, rows: list[dict[str, Any]]) -> None:
+        """Persist aggregate provider metrics (no prompts, secrets, or chat content)."""
+        if not rows:
+            return
+        now = int(time.time())
+        async with self.connect() as db:
+            await db.executemany(
+                "INSERT INTO provider_telemetry(ts,name,model,family,privacy_tier,successes,failures,prompt_tokens,completion_tokens,error_classes_json) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                [
+                    (
+                        now,
+                        str(row.get("name", "")),
+                        str(row.get("model", "")),
+                        str(row.get("family", "")),
+                        str(row.get("privacy_tier", "")),
+                        int(row.get("successes", 0) or 0),
+                        int(row.get("failures", 0) or 0),
+                        int(row.get("prompt_tokens", 0) or 0),
+                        int(row.get("completion_tokens", 0) or 0),
+                        json.dumps(row.get("error_classes", {}) or {}),
+                    )
+                    for row in rows
+                ],
+            )
+            await db.commit()
+
+    async def latest_provider_telemetry(self, limit: int = 100) -> list[dict[str, Any]]:
+        """Return the most recent aggregate telemetry rows for observability."""
+        async with self.connect() as db:
+            rows = await (await db.execute(
+                "SELECT ts,name,model,family,privacy_tier,successes,failures,prompt_tokens,completion_tokens,error_classes_json FROM provider_telemetry ORDER BY id DESC LIMIT ?",
+                (max(1, min(int(limit), 500)),),
+            )).fetchall()
+        result = []
+        for row in reversed(rows):
+            result.append({
+                "ts": row["ts"],
+                "name": row["name"],
+                "model": row["model"],
+                "family": row["family"],
+                "privacy_tier": row["privacy_tier"],
+                "successes": row["successes"],
+                "failures": row["failures"],
+                "prompt_tokens": row["prompt_tokens"],
+                "completion_tokens": row["completion_tokens"],
+                "error_classes": json.loads(row["error_classes_json"] or "{}"),
+            })
+        return result
 
     async def register_managed_project(self, project: dict[str, Any]) -> dict[str, Any]:
         now = int(time.time())

@@ -178,32 +178,32 @@ async def _interactive_chat(out: CLIOutput, *, initial_mode: str = "plan") -> in
                 tool_name = parts[1] if len(parts) > 1 else "catalog"
                 tool_query = parts[2] if len(parts) > 2 else ""
                 result = await _run_free_tool(tool_name, tool_query)
-                out.emit(result, text=result if not out.json_mode else Nonee)
+                out.emit(result, text=result if not out.json_mode else None)
             except FreeToolsError as exc:
                 print(str(exc))
             continue
         try:
             if mode == "ask":
                 answer = await ai.answer(value, _CLI_CONTEXT, [], _CHAT_SETTINGS)
-                out.emit(answer, text=answer if not out.json_mode else Nonee)
+                out.emit(answer, text=answer if not out.json_mode else None)
             elif mode == "build":
                 report = await _agent_plan(value, team=True)
-                out.emit(report, text=format_plan_report(report) if not out.json_mode else Nonee)
+                out.emit(report, text=format_plan_report(report) if not out.json_mode else None)
             elif mode == "route":
                 report = _heuristic_route(value)
-                out.emit(report, text=format_plan_report(report) if not out.json_mode else Nonee)
+                out.emit(report, text=format_plan_report(report) if not out.json_mode else None)
             elif mode == "tools":
                 try:
                     parts = value.split(maxsplit=1)
                     tool_name = parts[0]
                     tool_query = parts[1] if len(parts) > 1 else ""
                     result = await _run_free_tool(tool_name, tool_query)
-                    out.emit(result, text=result if not out.json_mode else Nonee)
+                    out.emit(result, text=result if not out.json_mode else None)
                 except FreeToolsError as exc:
                     print(str(exc))
             else:
                 report = await _agent_plan(value)
-                out.emit(report, text=format_plan_report(report) if not out.json_mode else Nonee)
+                out.emit(report, text=format_plan_report(report) if not out.json_mode else None)
         except Exception as exc:
             print(f"Error: {exc.__class__.__name__}")
 
@@ -217,6 +217,7 @@ async def run(args: argparse.Namespace) -> int:
     out = CLIOutput(json_mode=args.json, quiet=args.quiet)
     command = args.command
     if command in _DB_COMMANDS:
+        settings.prepare()
         await db.init()
 
     if command == "version":
@@ -240,11 +241,20 @@ async def run(args: argparse.Namespace) -> int:
         return 0
 
     if command == "doctor":
+        settings.prepare()
+        await db.init()
+        from .observability import build_observability
+        obs = build_observability(ai.router_instance, db)
+        obs_report = await obs.report(limit=50)
         models = await ai.status()
         report = {
             **redacted_config(settings),
             "model_profiles": len(models),
             "available_models": sum(bool(item.get("available")) for item in models),
+            "provider_requests": obs_report["total_requests"],
+            "provider_successes": obs_report["total_successes"],
+            "provider_failures": obs_report["total_failures"],
+            "provider_tokens": obs_report["total_tokens"],
             "database_ready": True,
             "free_tools": settings.enable_free_tools,
             "cli_version": __version__,
@@ -269,7 +279,7 @@ async def run(args: argparse.Namespace) -> int:
 
     if command == "route":
         report = _heuristic_route(args.text)
-        out.emit(report, text=format_plan_report(report) if not out.json_mode else Nonee)
+        out.emit(report, text=format_plan_report(report) if not out.json_mode else None)
         return 0
 
     if command == "search":
@@ -287,7 +297,7 @@ async def run(args: argparse.Namespace) -> int:
                     out.table(["Tool", "Summary", "Example"], rows, title="Free API tools")
                 return 0
             result = await _run_free_tool(args.tool_command, args.query or "")
-            out.emit(result, text=result if not out.json_mode else Nonee)
+            out.emit(result, text=result if not out.json_mode else None)
         except FreeToolsError as exc:
             print(str(exc), file=sys.stderr)
             return 1
@@ -312,13 +322,13 @@ async def run(args: argparse.Namespace) -> int:
 
     if command == "briefing":
         payload = await build_briefing(db, args.chat_id)
-        out.emit(payload, text=str(payload.get("text")) if not out.json_mode else Nonee)
+        out.emit(payload, text=str(payload.get("text")) if not out.json_mode else None)
         return 0
 
     if command == "rag-debug":
         findings = diagnose(args.text)
         report = public_report(findings)
-        out.emit({"findings": findings, "report": report}, text=report if not out.json_mode else Nonee)
+        out.emit({"findings": findings, "report": report}, text=report if not out.json_mode else None)
         return 0
 
     if command == "workspace":
@@ -367,17 +377,17 @@ async def run(args: argparse.Namespace) -> int:
 
     if command == "team":
         report = await _agent_plan(args.text, team=True)
-        out.emit(report, text=format_plan_report(report) if not out.json_mode else Nonee)
+        out.emit(report, text=format_plan_report(report) if not out.json_mode else None)
         return 0
 
     if command == "ask":
         answer = await ai.answer(args.text, _CLI_CONTEXT, [], _CHAT_SETTINGS)
-        out.emit(answer, text=answer if not out.json_mode else Nonee)
+        out.emit(answer, text=answer if not out.json_mode else None)
         return 0
 
     if command == "preview":
         report = await _agent_plan(args.text)
-        out.emit(report, text=format_plan_report(report) if not out.json_mode else Nonee)
+        out.emit(report, text=format_plan_report(report) if not out.json_mode else None)
         return 0
 
     if command == "chat":
@@ -388,10 +398,10 @@ async def run(args: argparse.Namespace) -> int:
             return await _interactive_chat(out, initial_mode="plan" if not args.ask else "ask")
         if args.ask:
             answer = await ai.answer(args.text, _CLI_CONTEXT, [], _CHAT_SETTINGS)
-            out.emit(answer, text=answer if not out.json_mode else Nonee)
+            out.emit(answer, text=answer if not out.json_mode else None)
             return 0
         report = await _agent_plan(args.text)
-        out.emit(report, text=format_plan_report(report) if not out.json_mode else Nonee)
+        out.emit(report, text=format_plan_report(report) if not out.json_mode else None)
         return 0
 
     if command == "skills":
@@ -415,12 +425,12 @@ async def run(args: argparse.Namespace) -> int:
         sub = args.host_command
         if sub == "guide":
             lines = clone_and_setup_guide()
-            out.emit({"guide": lines}, text=chr(10).join(lines) if not out.json_mode else Nonee)
+            out.emit({"guide": lines}, text=chr(10).join(lines) if not out.json_mode else None)
             return 0
         if sub == "install":
             report = full_install_agent(with_deps=True, start=False)
             text = format_steps_markdown(report)
-            out.emit(report.public_dict(), text=text if not out.json_mode else Nonee)
+            out.emit(report.public_dict(), text=text if not out.json_mode else None)
             return 0 if report.ok else 1
         if sub == "status":
             snap = status_snapshot()
@@ -445,7 +455,7 @@ async def run(args: argparse.Namespace) -> int:
             else:
                 (out.success if bot.ok else out.error)(f"bot: {bot.detail}")
             if not bot.ok:
-                out.emit({"ok": False, "bot": bot.detail} if out.json_mode else Nonee)
+                out.emit({"ok": False, "bot": bot.detail} if out.json_mode else None)
                 return 1
             if getattr(args, "api", False):
                 api = start_api(port=getattr(args, "port", None))
@@ -469,7 +479,7 @@ async def run(args: argparse.Namespace) -> int:
         if sub == "restart":
             report = restart_all(with_api=getattr(args, "api", False), port=getattr(args, "port", None))
             text = format_steps_markdown(report)
-            out.emit(report.public_dict(), text=text if not out.json_mode else Nonee)
+            out.emit(report.public_dict(), text=text if not out.json_mode else None)
             return 0 if report.ok else 1
         if sub == "logs":
             log_path = LOG_API if getattr(args, "api", False) else LOG_BOT
@@ -478,7 +488,7 @@ async def run(args: argparse.Namespace) -> int:
                 out.warn(f"No log yet at {log_path}")
                 return 0
             lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-tail_n:]
-            out.emit({"path": str(log_path), "lines": lines}, text=chr(10).join(lines) if not out.json_mode else Nonee)
+            out.emit({"path": str(log_path), "lines": lines}, text=chr(10).join(lines) if not out.json_mode else None)
             return 0
         out.error(f"Unknown host command: {sub}")
         return 2

@@ -64,6 +64,8 @@ class Settings:
     fallback_order: tuple[str, ...] = field(default_factory=lambda: tuple(value.strip().lower() for value in os.getenv("LILY_FALLBACK_ORDER", "free,gemini,openai,groq").split(",") if value.strip()))
     model_cooldown_base: float = field(default_factory=lambda: float(os.getenv("LILY_MODEL_COOLDOWN_BASE", "8")))
     model_cooldown_max: float = field(default_factory=lambda: float(os.getenv("LILY_MODEL_COOLDOWN_MAX", "300")))
+    observability_enabled: bool = field(default_factory=lambda: _bool("LILY_OBSERVABILITY_ENABLED", True))
+    observability_flush_seconds: float = field(default_factory=lambda: max(10.0, float(os.getenv("LILY_OBSERVABILITY_FLUSH_SECONDS", "60"))))
     stream_public_base_url: str = field(default_factory=lambda: os.getenv("LILY_STREAM_PUBLIC_BASE_URL", "").rstrip("/"))
     stream_link_ttl_seconds: int = field(default_factory=lambda: _int("LILY_STREAM_LINK_TTL", 3600))
     stream_bind_host: str = field(default_factory=lambda: os.getenv("LILY_STREAM_BIND_HOST", "127.0.0.1"))

@@ -1,5 +1,15 @@
 # Lily Feature Roadmap
 
+## Newly implemented (admin moderation inbox)
+
+- **Admin moderation inbox** — `Lily, show moderation inbox` / `/inbox` opens an interactive redacted review queue: open reports, pending member verifications, and unresolved warning sets, each with a one-tap admin action (resolve, approve join, clear warnings). Actions are admin-gated, audit-logged, and the keyboard is disabled after use.
+
+## Newly implemented (observability & moderation inbox)
+
+- **Provider observability** — aggregate per-model health, latency, error-class buckets, and token totals persisted to SQLite on a bounded cadence. Never stores prompts, completions, chat content, secrets, or provider responses. Surfaced via `/models` and `cli.sh doctor`.
+- **Moderation inbox in the ops briefing** — `/briefing` and `Lily, ops briefing` now aggregate open reports, pending verifications, unresolved warning counts, encoding-queue health, and AI provider health in one redacted admin view.
+- **CLI reliability** — fixed a `Nonee`/`None` typo that broke `cli.sh ... --json` output, and ensured DB-backed CLI commands create their storage directories before connecting.
+
 ## Newly implemented (agency upgrade)
 
 - **NEXUS scenario runbooks** — `startup-mvp`, `incident-response`, `content-launch`, `community-growth`, and `deep-research` phased workflows with specialist rosters.
@@ -32,7 +42,7 @@ Signed streaming links are now stored in Lily’s SQLite database instead of pro
 | 5 | Media presets | Add named encode presets for mobile, web, archive, audio extraction, and subtitle-safe video. | Allow-list codecs, containers, and FFmpeg flags; enforce size, duration, and concurrency limits. |
 | 6 | Channel post library | Save approved announcement templates and preview rendered RichMessage blocks before publishing. | Publishing and deletion remain confirmation-gated and channel-admin-only. |
 | 7 | Backup and restore | Export group settings, controls, skills, filters, and audit metadata for disaster recovery. | Exclude secrets and raw media; encrypt archives and require explicit admin confirmation. |
-| 8 | Provider observability | Track latency, cooldowns, error classes, and token usage by provider tier. | Store aggregate metrics by default and never persist prompts containing private media or secrets. |
+| 8 | Provider observability | Track latency, cooldowns, error classes, and token usage by provider tier. | ✅ Implemented — aggregate metrics stored; prompts/completions/secrets never persisted. |
 
 ## Deliberately deferred
 
