@@ -1,5 +1,9 @@
 # Lily Feature Roadmap
 
+## Newly implemented (admin moderation inbox)
+
+- **Admin moderation inbox** — `Lily, show moderation inbox` / `/inbox` opens an interactive redacted review queue: open reports, pending member verifications, and unresolved warning sets, each with a one-tap admin action (resolve, approve join, clear warnings). Actions are admin-gated, audit-logged, and the keyboard is disabled after use.
+
 ## Newly implemented (observability & moderation inbox)
 
 - **Provider observability** — aggregate per-model health, latency, error-class buckets, and token totals persisted to SQLite on a bounded cadence. Never stores prompts, completions, chat content, secrets, or provider responses. Surfaced via `/models` and `cli.sh doctor`.

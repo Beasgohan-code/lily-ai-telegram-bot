@@ -383,6 +383,22 @@ Lily, ops briefing
 # or
 /briefing
 ```
+
+## Admin moderation inbox
+
+Admins can open an interactive review queue with `Lily, show moderation inbox` or `/inbox`. It lists open reports, pending member verifications, and unresolved warning sets as a table, each with an inline button to act on it directly:
+
+- **Resolve report** — marks an open report resolved and records it in the audit log.
+- **Approve join** — approves a pending member verification and restores normal group permissions.
+- **Clear warnings** — clears a member's accumulated warnings.
+
+Every action is admin-gated, recorded as an audit event, and leaves no private reason/note content in chat. The keyboard is disabled after a single action so it cannot be double-clicked.
+
+```
+Lily, show moderation inbox
+# or
+/inbox
+```
 [2]: [Telegram Mini Apps: validating init data](https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app)
 [3]: [Telegram Bot API changelog](https://core.telegram.org/bots/api-changelog)
 [4]: [python-telegram-bot documentation](https://docs.python-telegram-bot.org/)

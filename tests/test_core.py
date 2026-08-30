@@ -1427,6 +1427,56 @@ class LilyCoreTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_heuristic_router_understands_moderation_inbox(self):
+        client = AIClient()
+        inbox = client.heuristic_plan("Lily show moderation inbox", {"chat_type": "group", "reply": {}})
+        self.assertEqual(inbox.action, "moderation_inbox")
+        self.assertEqual(AIClient().heuristic_plan("/inbox", {"chat_type": "group", "reply": {}}).action, "moderation_inbox")
+
+    def test_moderation_inbox_executes_and_renders_admin_buttons(self):
+        class Message:
+            message_id = 300
+        class Chat:
+            id = -100
+            type = "supergroup"
+        class User:
+            id = 200
+            full_name = "Test admin"
+        class UpdateStub:
+            effective_chat = Chat()
+            effective_user = User()
+            effective_message = Message()
+        class ContextStub:
+            pass
+
+        async def run():
+            with tempfile.TemporaryDirectory() as directory:
+                database = Database(str(Path(directory) / "inbox.sqlite3"))
+                await database.init()
+                await database.create_report(-100, 7, 88, "spam link")
+                await database.record_member_join(-100, 99, True)
+                await database.add_warning(-100, 77, "repeated spam")
+
+                sent = {}
+                async def fake_send(chat_id, blocks, **kwargs):
+                    sent["blocks"] = blocks
+                    sent["kwargs"] = kwargs
+                    return {"ok": True}
+                async def fake_is_admin(update):
+                    return True
+
+                with patch("lily.handlers.db", database), patch("lily.moderation.db", database), patch("lily.handlers.rich.send", new=AsyncMock(side_effect=fake_send)) as send, patch("lily.handlers.is_admin", new=fake_is_admin):
+                    result = await execute_plan(UpdateStub(), ContextStub(), Plan(action="moderation_inbox"))
+                self.assertIn("1 report(s)", result)
+                self.assertEqual(send.await_count, 1)
+                keyboard = sent["kwargs"]["reply_markup"]["inline_keyboard"]
+                flat = [btn["callback_data"] for row in keyboard for btn in row]
+                self.assertTrue(any(data.startswith("inbox:report:") for data in flat))
+                self.assertTrue(any(data.startswith("inbox:verify:") for data in flat))
+                self.assertTrue(any(data.startswith("inbox:warn:") for data in flat))
+
+        asyncio.run(run())
+
     def test_briefing_includes_redacted_moderation_inbox(self):
         from lily.briefing_digest import build_briefing
 
